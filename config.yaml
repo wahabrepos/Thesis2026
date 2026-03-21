@@ -16,7 +16,7 @@ system:
 corpus:
   sources:
     - type: "pubmed"
-      path: "${PUBMED_CORPUS_PATH}"
+      path: "./data/corpus/pubmed.jsonl"
       weight: 0.7
       max_docs: 50000
   chunk_size: 512
