@@ -95,10 +95,12 @@ class Trainer:
                 logger.info(f"Generated answer with {len(rationale)} rationale statements")
                 logger.info(f"Confidence: {confidence:.3f}")
                 
-                # 3. Self-Reflection Phase
-                support_score = self.self_reflector.verify(rationale, fused_context)
+                # 3. Self-Reflection Phase — single NLI pass returns both score and unsupported
+                support_score, unsupported_segments = self.self_reflector.verify_and_extract(
+                    rationale, fused_context
+                )
                 logger.info(f"Support score: {support_score:.3f} (threshold: {self.rationale_threshold})")
-                
+
                 # Store iteration results
                 iteration_entry = {
                     "iteration": iteration + 1,
@@ -111,7 +113,7 @@ class Trainer:
                     "citations": citations,
                 }
                 history.append(iteration_entry)
-                
+
                 # Check if we can stop
                 if support_score >= self.rationale_threshold:
                     logger.info(f"✓ Support threshold met ({support_score:.3f} >= {self.rationale_threshold})")
@@ -122,12 +124,12 @@ class Trainer:
                     final_citations = citations
                     iteration += 1
                     break
-                
+
                 # Check for minimal improvement (early stopping)
                 if self.early_stopping and iteration > 0:
                     prev_score = history[-2]["support_score"]
                     improvement = support_score - prev_score
-                    
+
                     if improvement < self.min_improvement:
                         logger.info(f"Early stopping: improvement {improvement:.3f} < {self.min_improvement}")
                         final_answer = answer
@@ -137,12 +139,8 @@ class Trainer:
                         final_citations = citations
                         iteration += 1
                         break
-                
-                # 4. Query Refinement
-                unsupported_segments = self.self_reflector.extract_unsupported(
-                    rationale,
-                    fused_context
-                )
+
+                # 4. Query Refinement — unsupported_segments already computed above
                 
                 if unsupported_segments:
                     logger.info(f"Found {len(unsupported_segments)} unsupported statements")
