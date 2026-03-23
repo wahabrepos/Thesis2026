@@ -16,12 +16,12 @@ system:
 corpus:
   sources:
     - type: "pubmed"
-      path: "./data/corpus/pubmed.jsonl"
+      path: "./data/corpus/pubmed_abstracts.jsonl"
       weight: 0.7
-      max_docs: 50000
+      max_docs: 10000
   chunk_size: 512
   chunk_overlap: 50
-  min_chunk_length: 100
+  min_chunk_length: 20
   lowercase: true
   remove_special_chars: false
 
@@ -31,11 +31,11 @@ retrieval:
     k1: 1.5
     b: 0.75
   dense:
-    model_name: "sentence-transformers/all-MiniLM-L6-v2"
+    model_name: "models/all-MiniLM-L6-v2"
     index_type: "faiss"
     embedding_dimension: 384
     normalize_embeddings: true
-  top_k: 10
+  top_k: 5
   min_score: 0.0
   rrf:
     k: 60
@@ -43,24 +43,24 @@ retrieval:
     weight_dense: 0.5
 
 generator:
-  model_name: "mistralai/Mistral-7B-Instruct-v0.3"
+  model_name: "Qwen/Qwen2.5-0.5B-Instruct"
   model_type: "causal"
   fallback_model: "google/flan-t5-large"
   fallback_model_type: "seq2seq"
-  
+
   load_in_4bit: true
   load_in_8bit: false
   bnb_4bit_compute_dtype: "float16"
   bnb_4bit_quant_type: "nf4"
   bnb_4bit_use_double_quant: true
   
-  max_new_tokens: 512
-  min_new_tokens: 50
+  max_new_tokens: 256
+  min_new_tokens: 20
   temperature: 0.3
   top_p: 0.9
   top_k: 50
   do_sample: true
-  repetition_penalty: 1.1
+  repetition_penalty: 1.3
   
   use_json_mode: true
   enforce_json: true
@@ -86,7 +86,7 @@ generator:
     max_api_calls_per_session: 10
 
 self_reflection:
-  nli_model: "microsoft/deberta-v3-base-mnli"
+  nli_model: "models/nli-deberta-v3-base"
   verification_threshold: 0.5
   rationale_score_threshold: 0.7
   nli_batch_size: 16
@@ -96,7 +96,7 @@ iteration:
   max_iterations: 3
   early_stopping: true
   min_improvement: 0.05
-  max_time_seconds: 300
+  max_time_seconds: 600
   refinement_strategy: "structured"
   include_history_in_prompt: true
   max_history_entries: 2
