@@ -97,12 +97,26 @@ generator:
     }
   
   api_fallback:
-    # Set enabled: true and export OPENAI_API_KEY to route low-confidence queries
-    # to gpt-4o-mini instead of re-running the local model.  This is the highest
-    # accuracy-per-latency trade-off available when the local model is uncertain.
+    # When the local model's self-reported confidence < use_when_confidence_below,
+    # the query is re-sent to a cloud LLM for a higher-quality answer.
+    #
+    # Set enabled: true and export the matching API key env var:
+    #
+    #   provider: "anthropic"  →  export ANTHROPIC_API_KEY=sk-ant-...
+    #     Recommended models: claude-haiku-4-5-20251001  (fast, cheap)
+    #                         claude-sonnet-4-6           (best accuracy)
+    #
+    #   provider: "mistral"    →  export MISTRAL_API_KEY=...
+    #     Recommended models: mistral-small-latest        (fast, cheap)
+    #                         mistral-medium-latest       (balanced)
+    #
+    #   provider: "openai"     →  export OPENAI_API_KEY=sk-...
+    #     Recommended models: gpt-4o-mini                 (fast, cheap)
+    #                         gpt-4o                      (best accuracy)
+    #
     enabled: false
-    provider: "openai"
-    model: "gpt-4o-mini"
+    provider: "anthropic"
+    model: "claude-haiku-4-5-20251001"
     use_when_confidence_below: 0.6
     max_api_calls_per_session: 10
 
