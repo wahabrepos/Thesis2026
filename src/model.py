@@ -619,17 +619,31 @@ class SelfReflectiveModule:
     def _load_model(self) -> None:
         """Load NLI model."""
         logger.info(f"Loading NLI model: {self.nli_model_name}")
-        
+
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(self.nli_model_name)
             self.model = AutoModelForSequenceClassification.from_pretrained(
                 self.nli_model_name
             )
-            self.model.to(self.device)
+            # Move to target device with CPU fallback — NvMap may refuse the
+            # contiguous allocation even when free_bytes looks sufficient.
+            if self.device.type == "cuda":
+                try:
+                    torch.cuda.empty_cache()
+                    self.model.to(self.device)
+                    logger.info(f"NLI model loaded on {self.device}")
+                except (torch.OutOfMemoryError, RuntimeError) as gpu_err:
+                    logger.warning(
+                        f"NLI GPU load failed ({gpu_err}), falling back to CPU"
+                    )
+                    self.device = torch.device("cpu")
+                    self.model.to(self.device)
+            else:
+                self.model.to(self.device)
             self.model.eval()
-            
+
             logger.info("NLI model loaded successfully")
-            
+
         except Exception as e:
             logger.error(f"Failed to load NLI model: {e}")
             raise
