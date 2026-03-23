@@ -60,7 +60,7 @@ generator:
   top_p: 0.9
   top_k: 50
   do_sample: false
-  repetition_penalty: 1.3
+  repetition_penalty: 1.0
   
   use_json_mode: true
   enforce_json: true
