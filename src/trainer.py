@@ -79,8 +79,11 @@ class Trainer:
                 bm25_results = retrieval_results.get("bm25", [])
                 dense_results = retrieval_results.get("dense", [])
                 fused_context = self.retrieval.fuse_results(bm25_results, dense_results)
-                
-                logger.info(f"Retrieved {len(fused_context)} passages")
+                # Trim to top_k — RRF returns all unique passages from both lists,
+                # but feeding all 19 to the generator and NLI explodes latency linearly.
+                fused_context = fused_context[: self.top_k]
+
+                logger.info(f"Retrieved {len(fused_context)} passages (top_k={self.top_k})")
                 
                 # 2. Generation Phase
                 answer, rationale, confidence, citations = self.generator.generate(
