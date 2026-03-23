@@ -448,12 +448,36 @@ Provide your answer in the JSON format specified in the system prompt."""
                 json_str = match.group(0)
                 parsed = json.loads(json_str)
                 
+                # Normalise: some model outputs use "causes", "result", etc.
+                # instead of "answer" — remap any recognised key to "answer".
+                for _alt in ("causes", "result", "response", "diagnosis", "conclusion"):
+                    if _alt in parsed and "answer" not in parsed:
+                        parsed["answer"] = parsed.pop(_alt)
+                        break
+
                 # Validate required fields
                 if "answer" in parsed and "rationale" in parsed:
-                    # Ensure rationale is a list
+                    # Ensure rationale is a list of strings
                     if isinstance(parsed["rationale"], str):
                         parsed["rationale"] = [parsed["rationale"]]
-                    
+                    elif isinstance(parsed["rationale"], list):
+                        parsed["rationale"] = [
+                            str(r) if not isinstance(r, str) else r
+                            for r in parsed["rationale"]
+                        ]
+
+                    # Ensure answer is a plain string (model sometimes returns a list of dicts)
+                    if isinstance(parsed["answer"], list):
+                        parts = []
+                        for item in parsed["answer"]:
+                            if isinstance(item, dict):
+                                parts.append(" ".join(str(v) for v in item.values() if v))
+                            elif item:
+                                parts.append(str(item))
+                        parsed["answer"] = " ".join(parts).strip() or "See rationale."
+                    elif not isinstance(parsed["answer"], str):
+                        parsed["answer"] = str(parsed["answer"])
+
                     # Add defaults for optional fields
                     parsed.setdefault("confidence", 0.7)
                     parsed.setdefault("citations", [])
@@ -572,12 +596,15 @@ class SelfReflectiveModule:
         # Batch processing
         self.nli_batch_size = sr_config.get("nli_batch_size", 16)
         
-        # Device — respect the same NvMap fragmentation guard used by GeneratorModule
+        # Device — DeBERTa-base is ~0.4 GiB; threshold lowered to 1.0 GiB so it
+        # loads on GPU after the 1.5B generator (~0.75 GiB) has already loaded.
+        # The old 3.0 GiB threshold always forced CPU because only ~2.75 GiB remained,
+        # making NLI 50× slower (6s/call on CPU vs ~0.1s on GPU).
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             free_bytes, _ = torch.cuda.mem_get_info(0)
             free_gib = free_bytes / (1024 ** 3)
-            if free_gib >= 3.0:
+            if free_gib >= 1.0:
                 self.device = torch.device("cuda")
             else:
                 logger.warning(
