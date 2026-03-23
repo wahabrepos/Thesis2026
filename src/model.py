@@ -391,7 +391,6 @@ Provide your answer in the JSON format specified in the system prompt."""
                 "top_k": self.top_k,
                 "do_sample": self.do_sample,
                 "repetition_penalty": self.repetition_penalty,
-                "no_repeat_ngram_size": 3,  # prevent degenerate repetition (e.g. "!!!...")
                 "pad_token_id": self.tokenizer.pad_token_id,
                 "eos_token_id": self.tokenizer.eos_token_id,
                 # Stabilise float16 logits before multinomial sampling
