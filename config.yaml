@@ -54,8 +54,8 @@ generator:
   bnb_4bit_quant_type: "nf4"
   bnb_4bit_use_double_quant: true
   
-  max_new_tokens: 256
-  min_new_tokens: 20
+  max_new_tokens: 128
+  min_new_tokens: 10
   temperature: 0.3
   top_p: 0.9
   top_k: 50
