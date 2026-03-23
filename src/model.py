@@ -260,38 +260,27 @@ Provide your answer in the JSON format specified in the system prompt."""
 
             logger.info("Model loaded successfully")
 
-            # Warmup: prime the NvMap CUDA memory manager with a generation that
-            # mirrors real usage parameters (use_cache=False, ~256 input tokens, 32 new tokens).
-            # A single token warmup doesn't allocate enough NvMap handles; the first real
-            # generate() then hits NvMapMemAllocInternalTagged error 12 on Jetson.
-            # Matching use_cache=False + longer sequence forces NvMap to set up all the
-            # kernel/memory handles needed for actual queries up front.
+            # Warmup: a minimal single-token generation to prime NvMap CUDA handles.
+            # Kept tiny (1 token, short input) to avoid OOM during pipeline init —
+            # on Jetson unified memory, a large warmup competes with NLI model loading.
+            # NvMap errors on the first real query are retried automatically.
             if self.model_type == "causal" and torch.cuda.is_available():
                 try:
                     _dev = next(self.model.parameters()).device
-                    # ~256-token input so NvMap allocates attention buffers at real scale
-                    _warmup_text = (
-                        "You are a medical AI. Answer the question based on the context.\n"
-                        "Context: Insulin resistance is a key feature of type 2 diabetes. "
-                        "The pancreatic beta cells initially compensate by producing more insulin. "
-                        "Over time, beta cell exhaustion leads to relative insulin deficiency. "
-                        "Obesity and physical inactivity are major risk factors.\n"
-                        "Question: What causes type 2 diabetes?\nAnswer:"
-                    )
                     _dummy = self.tokenizer(
-                        _warmup_text, return_tensors="pt", truncation=True, max_length=256
+                        "warmup", return_tensors="pt", truncation=True, max_length=16
                     ).to(_dev)
                     with torch.no_grad():
                         self.model.generate(
                             **_dummy,
-                            max_new_tokens=32,
+                            max_new_tokens=1,
                             do_sample=False,
-                            use_cache=False,  # match real generation — forces same NvMap paths
+                            use_cache=True,
                             pad_token_id=self.tokenizer.pad_token_id,
                             eos_token_id=self.tokenizer.eos_token_id,
                         )
                     torch.cuda.empty_cache()
-                    logger.info("CUDA warmup generation complete (use_cache=False, 32 tokens)")
+                    logger.info("CUDA warmup complete")
                 except Exception as _w:
                     logger.warning(f"CUDA warmup failed: {_w} — first query may be slow")
 
