@@ -280,10 +280,10 @@ Provide your answer in the JSON format specified in the system prompt."""
                             **_dummy,
                             max_new_tokens=1,
                             do_sample=False,
-                            use_cache=True,
-                            pad_token_id=self.tokenizer.pad_token_id,
-                            eos_token_id=self.tokenizer.eos_token_id,
-                        )
+                            use_cache=False,  # must be False: use_cache=True leaves NvMap
+                            pad_token_id=self.tokenizer.pad_token_id,  # KV-cache handles
+                            eos_token_id=self.tokenizer.eos_token_id,  # occupied, causing all
+                        )                                               # real queries to OOM
                     torch.cuda.empty_cache()
                     logger.info("CUDA warmup complete")
                 except Exception as _w:
@@ -384,7 +384,8 @@ Provide your answer in the JSON format specified in the system prompt."""
                 prompt,
                 return_tensors="pt",
                 truncation=True,
-                max_length=1024,  # Truncate to avoid float16 attention overflow on CPU
+                max_length=512,   # 512 keeps bfloat16 attention scores within safe range;
+                                  # 1024 caused NaN logits → all logits 0 → argmax = "!"
             ).to(self.device)
             
             # Generation parameters
