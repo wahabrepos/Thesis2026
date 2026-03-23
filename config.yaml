@@ -43,7 +43,7 @@ retrieval:
     weight_dense: 0.5
 
 generator:
-  model_name: "Qwen/Qwen2.5-1.5B-Instruct"
+  model_name: "microsoft/Phi-3-mini-4k-instruct"
   model_type: "causal"
   fallback_model: "google/flan-t5-large"
   fallback_model_type: "seq2seq"
@@ -54,7 +54,7 @@ generator:
   bnb_4bit_quant_type: "nf4"
   bnb_4bit_use_double_quant: true
   
-  max_new_tokens: 128
+  max_new_tokens: 200
   min_new_tokens: 0
   temperature: 0
   top_p: 0.9
