@@ -43,7 +43,7 @@ retrieval:
     weight_dense: 0.5
 
 generator:
-  model_name: "microsoft/Phi-3-mini-4k-instruct"
+  model_name: "Qwen/Qwen2.5-1.5B-Instruct"
   model_type: "causal"
   fallback_model: "google/flan-t5-large"
   fallback_model_type: "seq2seq"
