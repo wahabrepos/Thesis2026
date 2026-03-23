@@ -50,12 +50,12 @@ retrieval:
 
 generator:
   # --- Model selection ---
-  # Option A (default): Qwen2.5-1.5B — fits in 8GB unified memory at 4-bit
-  model_name: "Qwen/Qwen2.5-1.5B-Instruct"
-  model_type: "causal"
-  # Option B: Qwen2.5-3B — meaningfully more accurate, ~1.2 GiB at 4-bit, still fits
-  # model_name: "Qwen/Qwen2.5-3B-Instruct"
+  # Option A: Qwen2.5-1.5B — fits in 8GB unified memory at 4-bit
+  # model_name: "Qwen/Qwen2.5-1.5B-Instruct"
   # model_type: "causal"
+  # Option B (active): Qwen2.5-3B — meaningfully more accurate, ~1.2 GiB at 4-bit, still fits
+  model_name: "Qwen/Qwen2.5-3B-Instruct"
+  model_type: "causal"
   # Option C: FLAN-T5-XL seq2seq — faster generation, structured-output friendly
   # model_name: "google/flan-t5-xl"
   # model_type: "seq2seq"
