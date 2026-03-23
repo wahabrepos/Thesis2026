@@ -68,6 +68,11 @@ class GeneratorModule:
         self.use_json_mode = gen_config.get("use_json_mode", True)
         self.enforce_json = gen_config.get("enforce_json", True)
         self.max_json_retries = gen_config.get("max_json_retries", 3)
+
+        # Input context window — 512 caused NaN logits with float16 eager attention;
+        # bfloat16 (used by 4-bit NF4 compute) has the same exponent range as float32
+        # so 1024 is safe. Increase further only if the model is loaded in bfloat16/float32.
+        self.max_input_length = gen_config.get("max_input_length", 1024)
         
         # Prompts
         self.system_prompt = gen_config.get("system_prompt", self._default_system_prompt())
@@ -384,8 +389,7 @@ Provide your answer in the JSON format specified in the system prompt."""
                 prompt,
                 return_tensors="pt",
                 truncation=True,
-                max_length=512,   # 512 keeps bfloat16 attention scores within safe range;
-                                  # 1024 caused NaN logits → all logits 0 → argmax = "!"
+                max_length=self.max_input_length,
             ).to(self.device)
             
             # Generation parameters
@@ -653,88 +657,109 @@ class SelfReflectiveModule:
             logger.error(f"Failed to load NLI model: {e}")
             raise
     
-    def verify(self, rationale: List[str], context: List[str]) -> float:
+    def _run_nli_batch(self, pairs: List[Tuple[str, str]]) -> List[float]:
         """
-        Verify rationale support using NLI.
-        
+        Run NLI inference on a list of (premise, hypothesis) pairs in batches.
+
         Returns:
-            Support score (0-1)
+            List of entailment probabilities, one per pair.
+        """
+        entailment_probs: List[float] = []
+
+        for batch_start in range(0, len(pairs), self.nli_batch_size):
+            batch = pairs[batch_start : batch_start + self.nli_batch_size]
+            premises   = [p for p, _ in batch]
+            hypotheses = [h for _, h in batch]
+            try:
+                inputs = self.tokenizer(
+                    premises,
+                    hypotheses,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=512,
+                    padding=True,
+                ).to(self.device)
+
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+
+                probs = F.softmax(outputs.logits, dim=-1)          # (B, 3)
+                # MNLI label order: 0=contradiction, 1=neutral, 2=entailment
+                batch_entailment = probs[:, 2].tolist()
+                entailment_probs.extend(batch_entailment)
+
+            except Exception as e:
+                logger.error(f"NLI batch inference failed: {e}")
+                entailment_probs.extend([0.0] * len(batch))
+
+        return entailment_probs
+
+    def verify_and_extract(
+        self, rationale: List[str], context: List[str]
+    ) -> Tuple[float, List[str]]:
+        """
+        Verify rationale support and extract unsupported statements in a single NLI pass.
+
+        Replaces the previous separate verify() + extract_unsupported() calls which
+        each ran the full O(statements × passages) loop independently.
+
+        Returns:
+            Tuple of (support_score, unsupported_statements)
         """
         if not rationale:
-            return 1.0
-        
+            return 1.0, []
+
+        n_stmts   = len(rationale)
+        n_passages = len(context)
+
+        if n_passages == 0:
+            logger.warning("No context passages — treating all statements as unsupported")
+            return 0.0, list(rationale)
+
+        # Build all (passage, statement) pairs in row-major order:
+        # row = statement index, col = passage index
+        pairs: List[Tuple[str, str]] = [
+            (passage, stmt)
+            for stmt in rationale
+            for passage in context
+        ]
+
+        # Single batched forward pass — replaces O(n_stmts * n_passages) sequential calls
+        all_probs = self._run_nli_batch(pairs)
+
+        # Reshape into (n_stmts, n_passages) and take per-statement max over passages
         supported_count = 0
-        
-        for statement in rationale:
-            best_score = 0.0
-            
-            # Check against all context passages
-            for passage in context:
-                try:
-                    # Tokenize
-                    inputs = self.tokenizer(
-                        passage,  # Premise
-                        statement,  # Hypothesis
-                        return_tensors="pt",
-                        truncation=True,
-                        max_length=512,
-                    ).to(self.device)
-                    
-                    # Inference
-                    with torch.no_grad():
-                        outputs = self.model(**inputs)
-                    
-                    # Get entailment probability
-                    probs = F.softmax(outputs.logits, dim=-1)[0]
-                    entailment_prob = probs[2].item()  # Index 2 = entailment for MNLI
-                    
-                    best_score = max(best_score, entailment_prob)
-                    
-                except Exception as e:
-                    logger.error(f"NLI inference failed: {e}")
-                    continue
-            
-            # Check if supported
-            if best_score >= self.verification_threshold:
+        unsupported: List[str] = []
+        for i, stmt in enumerate(rationale):
+            row_start = i * n_passages
+            row_probs = all_probs[row_start : row_start + n_passages]
+            best_score = max(row_probs) if row_probs else 0.0
+
+            supported = best_score >= self.verification_threshold
+            if supported:
                 supported_count += 1
-            
-            logger.debug(f"Statement support: {best_score:.3f} ({'✓' if best_score >= self.verification_threshold else '✗'})")
-        
-        support_score = supported_count / len(rationale)
-        logger.info(f"Overall support score: {support_score:.3f} ({supported_count}/{len(rationale)})")
-        
-        return support_score
-    
+            else:
+                unsupported.append(stmt)
+
+            logger.debug(
+                f"Statement [{i+1}] support: {best_score:.3f} "
+                f"({'✓' if supported else '✗'})"
+            )
+
+        support_score = supported_count / n_stmts
+        logger.info(
+            f"NLI pass: {len(pairs)} pairs in {-(-len(pairs) // self.nli_batch_size)} batches — "
+            f"support score {support_score:.3f} ({supported_count}/{n_stmts}), "
+            f"{len(unsupported)} unsupported"
+        )
+        return support_score, unsupported
+
+    def verify(self, rationale: List[str], context: List[str]) -> float:
+        """Verify rationale support. Delegates to verify_and_extract()."""
+        score, _ = self.verify_and_extract(rationale, context)
+        return score
+
     def extract_unsupported(self, rationale: List[str], context: List[str]) -> List[str]:
-        """Extract unsupported statements."""
-        unsupported = []
-        
-        for statement in rationale:
-            best_score = 0.0
-            
-            for passage in context:
-                try:
-                    inputs = self.tokenizer(
-                        passage,
-                        statement,
-                        return_tensors="pt",
-                        truncation=True,
-                        max_length=512,
-                    ).to(self.device)
-                    
-                    with torch.no_grad():
-                        outputs = self.model(**inputs)
-                    
-                    probs = F.softmax(outputs.logits, dim=-1)[0]
-                    entailment_prob = probs[2].item()
-                    
-                    best_score = max(best_score, entailment_prob)
-                    
-                except Exception as e:
-                    continue
-            
-            if best_score < self.verification_threshold:
-                unsupported.append(statement)
-        
-        logger.info(f"Extracted {len(unsupported)} unsupported statements")
+        """Extract unsupported statements. Delegates to verify_and_extract()."""
+        _, unsupported = self.verify_and_extract(rationale, context)
         return unsupported
