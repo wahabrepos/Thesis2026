@@ -119,7 +119,12 @@ Provide your answer in the JSON format specified in the system prompt."""
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=self.load_in_4bit,
                 load_in_8bit=self.load_in_8bit,
-                bnb_4bit_compute_dtype=torch.float16,
+                # bfloat16 has the same dynamic range as float32 (8-bit exponent).
+                # float16 (5-bit exponent, max ~65504) overflows in eager attention
+                # on sequences ≥ 512 tokens, producing NaN logits that collapse to
+                # token 0 = "!" after nan_to_num(nan=0.0) + argmax. Jetson Orin
+                # SM8.7 (Ampere) supports bfloat16 tensor cores natively.
+                bnb_4bit_compute_dtype=torch.bfloat16,
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_use_double_quant=True,
                 llm_int8_enable_fp32_cpu_offload=True,
