@@ -10,6 +10,8 @@ Reciprocal Rank Fusion (RRF) with the constant K read from configuration.
 import hashlib
 import logging
 import os
+import re
+import string
 from pathlib import Path
 from typing import Dict, List, Any
 import numpy as np
@@ -17,6 +19,34 @@ import faiss
 import torch
 from transformers import AutoTokenizer, AutoModel
 from rank_bm25 import BM25Okapi
+
+# ---------------------------------------------------------------------------
+# Stopword list — hardcoded to avoid an NLTK download dependency.
+# Combines standard English stopwords with common medical filler words that
+# carry no discriminative value in BM25 (e.g. "patient", "study", "also").
+# Medical entity terms (drug names, anatomical terms, conditions) are kept.
+# ---------------------------------------------------------------------------
+_STOPWORDS = frozenset({
+    # English function words
+    "a", "an", "the", "and", "or", "but", "if", "in", "on", "at", "to",
+    "for", "of", "with", "by", "from", "is", "are", "was", "were", "be",
+    "been", "being", "have", "has", "had", "do", "does", "did", "will",
+    "would", "could", "should", "may", "might", "shall", "can", "need",
+    "that", "this", "these", "those", "it", "its", "as", "not", "no",
+    "nor", "so", "yet", "both", "either", "neither", "each", "than",
+    "such", "up", "out", "about", "into", "through", "during", "before",
+    "after", "above", "below", "between", "while", "where", "when", "who",
+    "which", "their", "they", "them", "he", "she", "we", "our", "us",
+    "also", "however", "therefore", "thus", "hence", "whereas",
+    "moreover", "furthermore", "although", "because", "since", "whether",
+    # High-frequency medical filler words
+    "patient", "patients", "study", "studies", "result", "results",
+    "method", "methods", "conclusion", "conclusions", "background",
+    "objective", "purpose", "aim", "aims", "found", "showed", "shown",
+    "using", "used", "based", "associated", "compared", "significantly",
+    "among", "including", "included", "reported", "data", "analysis",
+    "clinical", "case", "cases", "group", "groups", "effect", "effects",
+})
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -84,7 +114,7 @@ class RetrievalModule:
             self.corpus = corpus
 
         # Build BM25 index on tokenized corpus
-        tokenized_corpus: List[List[str]] = [doc.lower().split() for doc in self.corpus]
+        tokenized_corpus: List[List[str]] = [self._tokenize(doc) for doc in self.corpus]
         self.bm25: BM25Okapi = BM25Okapi(tokenized_corpus)
         logger.info("BM25 index built on the corpus.")
 
@@ -98,6 +128,28 @@ class RetrievalModule:
 
         # Compute dense embeddings for the corpus documents and build FAISS index
         self._build_dense_index()
+
+    @staticmethod
+    def _tokenize(text: str) -> List[str]:
+        """
+        Tokenize text for BM25 indexing and querying.
+
+        Pipeline:
+          1. Lowercase
+          2. Strip punctuation (preserves hyphens inside words like "HbA1c",
+             "IL-6", "beta-blocker" — only leading/trailing punctuation removed)
+          3. Split on whitespace
+          4. Remove stopwords and single-character tokens
+
+        Medical hyphenated terms and alphanumeric codes (e.g. "COVID-19",
+        "TNF-alpha", "HbA1c") are preserved intact.
+        """
+        text = text.lower()
+        # Remove punctuation except hyphens surrounded by word characters
+        text = re.sub(r"[^\w\s-]", " ", text)          # drop non-word, non-hyphen chars
+        text = re.sub(r"(?<!\w)-|-(?!\w)", " ", text)  # drop lone hyphens
+        tokens = text.split()
+        return [t for t in tokens if t not in _STOPWORDS and len(t) > 1]
 
     def _corpus_cache_key(self) -> str:
         """Generate a short hash key from corpus size + model name + first/last docs."""
@@ -170,8 +222,8 @@ class RetrievalModule:
             Dict[str, List[str]]: A dictionary with keys "bm25" and "dense" containing lists of
             retrieved document texts.
         """
-        # Preprocess query for BM25: simple whitespace tokenization and lowercasing
-        query_tokens: List[str] = query.lower().split()
+        # Tokenize query the same way the corpus was indexed
+        query_tokens: List[str] = self._tokenize(query)
         top_k: int = min(10, len(self.corpus))  # Number of top documents to retrieve
         bm25_results: List[str] = self.bm25.get_top_n(query_tokens, self.corpus, n=top_k)
         logger.info(f"BM25 retrieval returned {len(bm25_results)} documents.")
