@@ -31,7 +31,13 @@ retrieval:
     k1: 1.5
     b: 0.75
   dense:
-    model_name: "models/all-MiniLM-L6-v2"
+    # Biomedical-specific embedding model — significantly better semantic matching
+    # for medical terminology than the previous general-purpose all-MiniLM-L6-v2.
+    # Same 384-dim output, same FAISS index shape, drop-in replacement.
+    # Delete ./cache/faiss/ after changing this so the index is rebuilt.
+    model_name: "models/bge-small-en-v1.5"
+    # Alternative biomedical option (higher quality, slightly larger):
+    # model_name: "pritamdeka/S-PubMedBert-MS-MARCO"  # 768-dim → update embedding_dimension
     index_type: "faiss"
     embedding_dimension: 384
     normalize_embeddings: true
@@ -43,25 +49,37 @@ retrieval:
     weight_dense: 0.5
 
 generator:
+  # --- Model selection ---
+  # Option A (default): Qwen2.5-1.5B — fits in 8GB unified memory at 4-bit
   model_name: "Qwen/Qwen2.5-1.5B-Instruct"
   model_type: "causal"
+  # Option B: Qwen2.5-3B — meaningfully more accurate, ~1.2 GiB at 4-bit, still fits
+  # model_name: "Qwen/Qwen2.5-3B-Instruct"
+  # model_type: "causal"
+  # Option C: FLAN-T5-XL seq2seq — faster generation, structured-output friendly
+  # model_name: "google/flan-t5-xl"
+  # model_type: "seq2seq"
   fallback_model: "google/flan-t5-large"
   fallback_model_type: "seq2seq"
 
   load_in_4bit: true
   load_in_8bit: false
-  bnb_4bit_compute_dtype: "float16"
+  bnb_4bit_compute_dtype: "bfloat16"   # bfloat16 has float32 exponent range → no NaN at 1024 tokens
   bnb_4bit_quant_type: "nf4"
   bnb_4bit_use_double_quant: true
-  
-  max_new_tokens: 200
+
+  # Input context window: 1024 is safe with bfloat16 compute (was 512, which truncated
+  # most of the retrieved passages before the model ever saw them).
+  max_input_length: 1024
+
+  max_new_tokens: 400     # was 200 — need space for JSON + multi-step rationale
   min_new_tokens: 0
   temperature: 0
   top_p: 0.9
   top_k: 50
   do_sample: false
   repetition_penalty: 1.0
-  
+
   use_json_mode: true
   enforce_json: true
   max_json_retries: 3
@@ -79,6 +97,9 @@ generator:
     }
   
   api_fallback:
+    # Set enabled: true and export OPENAI_API_KEY to route low-confidence queries
+    # to gpt-4o-mini instead of re-running the local model.  This is the highest
+    # accuracy-per-latency trade-off available when the local model is uncertain.
     enabled: false
     provider: "openai"
     model: "gpt-4o-mini"
