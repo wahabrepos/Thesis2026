@@ -342,17 +342,27 @@ Provide your answer in the JSON format specified in the system prompt."""
                 torch.cuda.empty_cache()
             # For instruct/chat models, apply the tokenizer's chat template so the model
             # sees the proper <|im_start|>system/user/assistant tokens instead of raw text.
-            # This prevents Qwen2.5-Instruct from generating conversation fragments.
+            # BUG FIX: do NOT split on "\n\n" — self.system_prompt itself contains "\n\n"
+            # (before the OUTPUT FORMAT block), so split("\n\n", 1) cut the system message
+            # in half and placed the JSON schema into the user message, causing the model
+            # to see a garbled prompt and generate "!!!!!!..." as its first token.
+            # Fix: use self.system_prompt directly as the system message, and strip it
+            # from the front of the constructed prompt to isolate the user content.
             if self.model_type == "causal" and hasattr(self.tokenizer, "apply_chat_template"):
-                # Split the raw prompt back into system + user parts
-                # (system_prompt is the first section before the first "\n\n")
-                parts = prompt.split("\n\n", 1)
-                system_part = parts[0].strip() if len(parts) > 1 else ""
-                user_part = parts[1].strip() if len(parts) > 1 else prompt.strip()
+                sys_text = self.system_prompt.strip()
+                separator = self.system_prompt + "\n\n"
+                if prompt.startswith(separator):
+                    user_text = prompt[len(separator):].strip()
+                elif prompt.startswith(sys_text):
+                    user_text = prompt[len(sys_text):].strip()
+                else:
+                    # fallback: everything is the user message
+                    user_text = prompt.strip()
+                    sys_text = ""
                 messages = []
-                if system_part:
-                    messages.append({"role": "system", "content": system_part})
-                messages.append({"role": "user", "content": user_part})
+                if sys_text:
+                    messages.append({"role": "system", "content": sys_text})
+                messages.append({"role": "user", "content": user_text})
                 try:
                     prompt = self.tokenizer.apply_chat_template(
                         messages,
