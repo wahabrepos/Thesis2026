@@ -77,7 +77,17 @@ class GeneratorModule:
         # Prompts
         self.system_prompt = gen_config.get("system_prompt", self._default_system_prompt())
         self.user_prompt_template = gen_config.get("user_prompt_template", self._default_user_prompt())
-        
+
+        # API fallback — routes low-confidence queries to a cloud LLM instead of
+        # re-running the local model.  Supported providers: anthropic, mistral, openai.
+        fb_config = gen_config.get("api_fallback", {})
+        self.api_fallback_enabled   = fb_config.get("enabled", False)
+        self.api_fallback_provider  = fb_config.get("provider", "anthropic").lower()
+        self.api_fallback_model     = fb_config.get("model", "claude-haiku-4-5-20251001")
+        self.api_fallback_threshold = float(fb_config.get("use_when_confidence_below", 0.6))
+        self.api_fallback_max_calls = int(fb_config.get("max_api_calls_per_session", 10))
+        self._api_call_count        = 0   # session counter
+
         # Load model (device selected inside _load_model after model is placed)
         self._load_model()
         self.device = next(self.model.parameters()).device
@@ -527,6 +537,121 @@ Provide your answer in the JSON format specified in the system prompt."""
             "citations": []
         }
     
+    def _generate_via_api(
+        self,
+        query: str,
+        context: List[str],
+        history: List[Dict[str, Any]],
+    ) -> Tuple[str, List[str], float, List[str]]:
+        """
+        Generate an answer via a cloud LLM API (Anthropic, Mistral, or OpenAI).
+
+        The same system prompt and user template used for local generation are sent
+        to the API so the JSON output format is identical and _parse_json_output()
+        can handle the response without any extra logic.
+
+        Returns:
+            Tuple of (answer, rationale, confidence, citations)
+        """
+        prompt = self._construct_prompt(query, context, history)
+
+        # Split into system / user parts the same way _generate_text() does
+        sys_text  = self.system_prompt.strip()
+        separator = self.system_prompt + "\n\n"
+        if prompt.startswith(separator):
+            user_text = prompt[len(separator):].strip()
+        elif prompt.startswith(sys_text):
+            user_text = prompt[len(sys_text):].strip()
+        else:
+            user_text = prompt.strip()
+
+        provider = self.api_fallback_provider
+        model    = self.api_fallback_model
+        logger.info(f"API fallback: provider={provider} model={model} (call #{self._api_call_count + 1})")
+
+        raw_text = ""
+
+        # ── Anthropic (Claude) ────────────────────────────────────────────────
+        if provider == "anthropic":
+            try:
+                import anthropic  # pip install anthropic
+            except ImportError:
+                raise ImportError("anthropic package not installed — run: pip install anthropic")
+            import os
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            if not api_key:
+                raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
+
+            client   = anthropic.Anthropic(api_key=api_key)
+            response = client.messages.create(
+                model=model,
+                max_tokens=self.max_new_tokens,
+                system=sys_text,
+                messages=[{"role": "user", "content": user_text}],
+            )
+            raw_text = response.content[0].text
+
+        # ── Mistral ───────────────────────────────────────────────────────────
+        elif provider == "mistral":
+            try:
+                from mistralai import Mistral  # pip install mistralai
+            except ImportError:
+                raise ImportError("mistralai package not installed — run: pip install mistralai")
+            import os
+            api_key = os.environ.get("MISTRAL_API_KEY", "")
+            if not api_key:
+                raise ValueError("MISTRAL_API_KEY environment variable is not set")
+
+            client   = Mistral(api_key=api_key)
+            response = client.chat.complete(
+                model=model,
+                messages=[
+                    {"role": "system", "content": sys_text},
+                    {"role": "user",   "content": user_text},
+                ],
+                max_tokens=self.max_new_tokens,
+            )
+            raw_text = response.choices[0].message.content
+
+        # ── OpenAI ────────────────────────────────────────────────────────────
+        elif provider == "openai":
+            try:
+                from openai import OpenAI  # pip install openai
+            except ImportError:
+                raise ImportError("openai package not installed — run: pip install openai")
+            import os
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY environment variable is not set")
+
+            client   = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": sys_text},
+                    {"role": "user",   "content": user_text},
+                ],
+                max_tokens=self.max_new_tokens,
+            )
+            raw_text = response.choices[0].message.content
+
+        else:
+            raise ValueError(
+                f"Unknown api_fallback provider '{provider}'. "
+                "Supported values: anthropic, mistral, openai"
+            )
+
+        # Parse exactly the same way as local output
+        parsed = self._parse_json_output(raw_text)
+        # API models are more reliable at JSON; bump default confidence slightly
+        parsed.setdefault("confidence", 0.85)
+        return (
+            parsed["answer"],
+            parsed["rationale"],
+            parsed["confidence"],
+            parsed["citations"],
+        )
+
     def generate(
         self,
         query: str,
@@ -543,45 +668,68 @@ Provide your answer in the JSON format specified in the system prompt."""
         prompt = self._construct_prompt(query, context, history)
         
         # Generate with retries for JSON mode
+        local_result: Optional[Tuple[str, List[str], float, List[str]]] = None
+
         for attempt in range(self.max_json_retries if self.enforce_json else 1):
             try:
-                # Generate text
                 output_text = self._generate_text(prompt)
-                
-                # Parse output
+
                 if self.use_json_mode:
                     parsed = self._parse_json_output(output_text)
-                    
-                    # Return if valid
+
                     if parsed["answer"] and parsed["rationale"]:
                         logger.info(f"Generated answer (attempt {attempt + 1})")
-                        return (
+                        local_result = (
                             parsed["answer"],
                             parsed["rationale"],
                             parsed["confidence"],
-                            parsed["citations"]
+                            parsed["citations"],
                         )
+                        break
                 else:
-                    # Non-JSON mode: simple parsing
-                    return (
-                        output_text,
-                        [output_text],
-                        0.7,
-                        []
-                    )
-                
+                    local_result = (output_text, [output_text], 0.7, [])
+                    break
+
             except Exception as e:
                 logger.warning(f"Generation attempt {attempt + 1} failed: {e}")
                 if attempt == self.max_json_retries - 1:
                     raise
-        
-        # Final fallback
-        return (
-            "Unable to generate answer",
-            ["Generation failed after retries"],
-            0.0,
-            []
+
+        if local_result is None:
+            local_result = (
+                "Unable to generate answer",
+                ["Generation failed after retries"],
+                0.0,
+                [],
+            )
+
+        # ── API fallback: if confidence is below threshold, escalate to cloud LLM ──
+        _, _, local_confidence, _ = local_result
+        can_call_api = (
+            self.api_fallback_enabled
+            and self._api_call_count < self.api_fallback_max_calls
+            and local_confidence < self.api_fallback_threshold
         )
+        if can_call_api:
+            logger.info(
+                f"Local confidence {local_confidence:.2f} < threshold "
+                f"{self.api_fallback_threshold:.2f} — escalating to "
+                f"{self.api_fallback_provider}/{self.api_fallback_model}"
+            )
+            try:
+                api_result = self._generate_via_api(query, context, history)
+                self._api_call_count += 1
+                logger.info(
+                    f"API fallback succeeded (session calls: {self._api_call_count}/"
+                    f"{self.api_fallback_max_calls})"
+                )
+                return api_result
+            except Exception as api_err:
+                logger.warning(
+                    f"API fallback failed ({api_err}) — returning local result"
+                )
+
+        return local_result
 
 
 class SelfReflectiveModule:
