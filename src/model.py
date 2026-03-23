@@ -396,9 +396,11 @@ Provide your answer in the JSON format specified in the system prompt."""
                 "eos_token_id": self.tokenizer.eos_token_id,
                 # Stabilise float16 logits before multinomial sampling
                 "logits_processor": LogitsProcessorList([_StableLogitsProcessor()]),
-                # Disable KV-cache to avoid NvMapMemAllocInternalTagged OOM on Jetson
-                # (per-layer contiguous cache allocation exceeds NvMap handle limits)
-                "use_cache": False,
+                # KV-cache re-enabled: the aggressive warmup in _load_model now pre-allocates
+                # the NvMap handles (use_cache=False, 256-token input, 32 new tokens) so the
+                # first real generate() no longer hits NvMapMemAllocInternalTagged error 12.
+                # Without KV-cache, generation is O(n²) in new tokens — unusably slow on Jetson.
+                "use_cache": True,
             }
             
             # Remove sampling params if temperature is 0 (greedy)
