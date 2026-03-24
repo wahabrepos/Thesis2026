@@ -252,8 +252,11 @@ Provide your answer in the JSON format specified in the system prompt."""
                     f"(max_memory={free_gib_str})"
                 )
                 load_kwargs = dict(
-                    device_map="cuda:0",  # force all layers to GPU — NF4 is CUDA-only,
-                    trust_remote_code=True,  # "auto" spills layers to CPU which breaks 4-bit
+                    # No device_map / max_memory — let transformers place the model
+                    # directly on cuda:0 without the CUDACachingAllocator memory-query
+                    # path that triggers a Jetson PyTorch assert (NVML_SUCCESS == r).
+                    device_map={"": 0},
+                    trust_remote_code=True,
                     torch_dtype="auto",
                     attn_implementation="eager",
                 )
