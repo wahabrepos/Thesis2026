@@ -12,7 +12,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import numpy as np
 import faiss
 import torch
@@ -85,7 +85,11 @@ class RetrievalModule:
 
         # Retrieve dense retrieval configuration
         dense_config: Dict[str, Any] = config.get("retrieval", {}).get("dense", {})
-        self.dense_model_name: str = dense_config.get("model_name", "Contriever-msmarco")
+        self.dense_model_name: str = dense_config.get("model_name", "BAAI/bge-small-en-v1.5")
+        # cache_dir: local directory holding a HF snapshot download.
+        # None → use the default HF_HOME cache.
+        _cache = dense_config.get("cache_dir", "")
+        self.dense_cache_dir: Optional[str] = _cache if _cache else None
 
         # Retrieve RRF constant
         rrf_config: Dict[str, Any] = config.get("retrieval", {}).get("rrf", {})
@@ -119,8 +123,12 @@ class RetrievalModule:
 
         # Set up dense retrieval: keep on CPU to reserve GPU memory for the generator
         self.device: torch.device = torch.device("cpu")
-        self.dense_tokenizer = AutoTokenizer.from_pretrained(self.dense_model_name)
-        self.dense_model = AutoModel.from_pretrained(self.dense_model_name)
+        self.dense_tokenizer = AutoTokenizer.from_pretrained(
+            self.dense_model_name, cache_dir=self.dense_cache_dir
+        )
+        self.dense_model = AutoModel.from_pretrained(
+            self.dense_model_name, cache_dir=self.dense_cache_dir
+        )
         self.dense_model.to(self.device)
         self.dense_model.eval()
         logger.info(f"Dense retrieval model '{self.dense_model_name}' loaded on device: {self.device}.")
