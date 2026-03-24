@@ -23,6 +23,42 @@ from transformers import (
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Patch: transformers stores quantization_config as a plain dict (or None)
+# when the bitsandbytes version doesn't match the saved model exactly.
+# PretrainedConfig.to_dict() then calls self.quantization_config.to_dict()
+# on a None/dict and crashes inside the INFO-level f-string log in from_dict.
+# We guard to_dict() once at import time — no-op if already patched.
+# ---------------------------------------------------------------------------
+import transformers.configuration_utils as _trf_cfg
+if not getattr(_trf_cfg.PretrainedConfig, "_qc_safe_patched", False):
+    # Bug in transformers: both to_dict() and to_diff_dict() call
+    #   self.quantization_config.to_dict()
+    # guarded only by `hasattr(self, "quantization_config")`, not `is not None`.
+    # When the installed bitsandbytes/transformers versions don't match the saved
+    # model, deserialization yields None → AttributeError on None.to_dict().
+    # Patch both methods to temporarily hide a None/raw-dict quantization_config.
+    def _make_safe(orig_fn):
+        def _safe(self):
+            qc = self.__dict__.get("quantization_config", "ABSENT")
+            needs_patch = qc is None or (qc != "ABSENT" and not hasattr(qc, "to_dict"))
+            if not needs_patch:
+                return orig_fn(self)
+            self.__dict__.pop("quantization_config", None)
+            try:
+                result = orig_fn(self)
+            finally:
+                if qc != "ABSENT":
+                    self.__dict__["quantization_config"] = qc
+            if isinstance(qc, dict):
+                result["quantization_config"] = qc
+            return result
+        return _safe
+
+    _trf_cfg.PretrainedConfig.to_dict      = _make_safe(_trf_cfg.PretrainedConfig.to_dict)
+    _trf_cfg.PretrainedConfig.to_diff_dict = _make_safe(_trf_cfg.PretrainedConfig.to_diff_dict)
+    _trf_cfg.PretrainedConfig._qc_safe_patched = True
+
 
 class _StableLogitsProcessor(LogitsProcessor):
     """Cast float16 logits → float32 and clamp inf/nan before sampling.
@@ -176,8 +212,10 @@ Provide your answer in the JSON format specified in the system prompt."""
             if cuda_available:
                 torch.cuda.empty_cache()
                 free_bytes, _ = torch.cuda.mem_get_info(0)
-                # Reserve 512 MiB headroom; clamp to at least 512 MiB so the key exists
-                gpu_budget_gib = max(0.5, (free_bytes / (1024 ** 3)) - 0.5)
+                # Reserve 200 MiB headroom (Jetson unified memory: OS+display already
+                # claims ~6-7 GiB, so free_bytes is tight; 512 MiB was too conservative
+                # and forced CPU loading for the 4-bit model which needs only ~0.75 GiB).
+                gpu_budget_gib = max(0.3, (free_bytes / (1024 ** 3)) - 0.2)
                 gpu_budget_str = f"{gpu_budget_gib:.1f}GiB"
                 logger.info(f"CUDA free: {free_bytes / (1024**3):.2f} GiB → GPU budget: {gpu_budget_str}")
             else:
@@ -186,14 +224,17 @@ Provide your answer in the JSON format specified in the system prompt."""
             max_memory = {0: gpu_budget_str, "cpu": "4GiB"} if cuda_available else {"cpu": "4GiB"}
 
             # GPU loading strategy for Jetson Orin Nano (8GB unified memory):
-            #   4-bit quantized (bitsandbytes) if configured + ≥ 1.5 GiB CUDA free
-            #     → ~0.75 GiB for model, needs clean NvMap state (fresh reboot)
+            #   4-bit quantized (bitsandbytes) if configured + ≥ 0.4 GiB CUDA budget
+            #     → ~0.75 GiB for model.  max_memory for 4-bit uses raw free_bytes
+            #     (not the conservative budget) so bitsandbytes can use all available
+            #     GPU memory rather than being capped at budget and spilling to CPU.
+            #     NF4 weights require CUDA — CPU spill for quantized layers is fatal.
             #   ≥ 3.5 GiB free → plain float16 on GPU (no bitsandbytes)
             #   ≥ 3.0 GiB free → float16 with CPU spill (device_map=auto)
-            #   < 3.0 GiB free → float32 on CPU (numerically stable on ARM64)
-            CUDA_4BIT_MIN_GIB  = 1.5   # minimum for 4-bit quantized GPU load
+            #   < 0.4 GiB budget → float16 on CPU (last resort)
+            CUDA_4BIT_MIN_GIB  = 0.4   # minimum budget for 4-bit GPU load (~0.75 GiB model)
             CUDA_GPU_FP16_GIB  = 3.5   # enough for full fp16 on GPU
-            CUDA_MIN_FREE_GIB  = 3.0   # minimum for any GPU loading
+            CUDA_MIN_FREE_GIB  = 3.0   # minimum for any unquantized GPU loading
 
             use_4bit_gpu = (cuda_available and quantization_config is not None
                             and gpu_budget_gib >= CUDA_4BIT_MIN_GIB)
@@ -201,12 +242,19 @@ Provide your answer in the JSON format specified in the system prompt."""
             use_gpu_fp16 = cuda_available and gpu_budget_gib >= CUDA_GPU_FP16_GIB
 
             if use_4bit_gpu:
-                logger.info(f"Attempting 4-bit GPU load: {gpu_budget_gib:.1f} GiB CUDA free")
+                # Use actual free GPU memory (not budget) as max_memory ceiling.
+                # Budget is conservative; bitsandbytes needs the full ~0.75 GiB on GPU
+                # and cannot spill NF4-quantized layers to CPU (CUDA-only operation).
+                free_gib_str = f"{(free_bytes / 1024**3):.1f}GiB"
+                max_memory_4bit = {0: free_gib_str, "cpu": "1GiB"}
+                logger.info(
+                    f"Attempting 4-bit GPU load: {free_bytes/1024**3:.2f} GiB free "
+                    f"(max_memory={free_gib_str})"
+                )
                 load_kwargs = dict(
-                    device_map="auto",
-                    trust_remote_code=True,
+                    device_map="cuda:0",  # force all layers to GPU — NF4 is CUDA-only,
+                    trust_remote_code=True,  # "auto" spills layers to CPU which breaks 4-bit
                     torch_dtype="auto",
-                    max_memory=max_memory,
                     attn_implementation="eager",
                 )
             elif not use_gpu:
@@ -242,24 +290,42 @@ Provide your answer in the JSON format specified in the system prompt."""
 
             # Load model — with OOM fallback to CPU if 4-bit GPU attempt fails
             def _do_load(kwargs, qconfig):
-                if self.model_type == "causal":
-                    return AutoModelForCausalLM.from_pretrained(
-                        self.model_name, quantization_config=qconfig, **kwargs)
-                elif self.model_type == "seq2seq":
-                    kwargs.pop("trust_remote_code", None)
-                    return AutoModelForSeq2SeqLM.from_pretrained(
-                        self.model_name, quantization_config=qconfig, **kwargs)
-                else:
-                    raise ValueError(f"Unknown model_type: {self.model_type}")
+                # Some pre-saved models (e.g. locally quantized with an older
+                # bitsandbytes/transformers) store quantization_config in config.json
+                # but the current transformers version deserializes it as None.
+                # PretrainedConfig.to_dict() then crashes on None.quantization_config
+                # inside an INFO-level log call.  Suppress that specific logger during
+                # loading; our explicit qconfig kwarg takes precedence over the file anyway.
+                _cfg_log = logging.getLogger("transformers.configuration_utils")
+                _prev_level = _cfg_log.level
+                _cfg_log.setLevel(logging.ERROR)
+                try:
+                    if self.model_type == "causal":
+                        return AutoModelForCausalLM.from_pretrained(
+                            self.model_name, quantization_config=qconfig, **kwargs)
+                    elif self.model_type == "seq2seq":
+                        kwargs.pop("trust_remote_code", None)
+                        return AutoModelForSeq2SeqLM.from_pretrained(
+                            self.model_name, quantization_config=qconfig, **kwargs)
+                    else:
+                        raise ValueError(f"Unknown model_type: {self.model_type}")
+                finally:
+                    _cfg_log.setLevel(_prev_level)
 
             try:
                 self.model = _do_load(load_kwargs, quantization_config)
             except (torch.OutOfMemoryError, RuntimeError) as oom_err:
                 if use_4bit_gpu:
-                    logger.warning(f"4-bit GPU load failed ({oom_err}), falling back to float16 CPU")
-                    cpu_kwargs = dict(device_map="cpu", trust_remote_code=True,
-                                     torch_dtype=torch.float16, attn_implementation="eager")
-                    self.model = _do_load(cpu_kwargs, None)
+                    # NF4 weights require CUDA — cannot dequantize on CPU.
+                    # Raise a clear message rather than silently loading broken weights.
+                    free_mb = torch.cuda.mem_get_info(0)[0] // (1024 * 1024) if cuda_available else 0
+                    raise RuntimeError(
+                        f"4-bit GPU load failed ({oom_err}). "
+                        f"The model '{self.model_name}' uses NF4 quantization which "
+                        f"requires CUDA — CPU fallback is not possible. "
+                        f"Currently {free_mb} MiB CUDA free. "
+                        "Free GPU memory (kill other processes, reboot Jetson) and retry."
+                    ) from oom_err
                 else:
                     raise
             
