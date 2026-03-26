@@ -117,8 +117,8 @@ generator:
     #                         gpt-4o                      (best accuracy)
     #
     enabled: true
-    provider: "anthropic"
-    model: "claude-haiku-4-5-20251001"
+    provider: "mistral"
+    model: "mistral-small-latest"
     use_when_confidence_below: 0.6
     max_api_calls_per_session: 10
 
