@@ -35,8 +35,10 @@ class MedRAGPipeline:
         temps = []
         for path in glob.glob("/sys/class/thermal/thermal_zone*/temp"):
             try:
-                temps.append(int(open(path).read().strip()) / 1000.0)
-            except OSError:
+                raw = open(path, "rb").read().strip()
+                if raw:
+                    temps.append(int(raw) / 1000.0)
+            except (OSError, ValueError):
                 pass
         if not temps:
             return 0.0
