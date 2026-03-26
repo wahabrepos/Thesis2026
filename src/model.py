@@ -692,7 +692,7 @@ Provide your answer in the JSON format specified in the system prompt."""
         # ── Mistral ───────────────────────────────────────────────────────────
         elif provider == "mistral":
             try:
-                from mistralai import Mistral  # pip install mistralai
+                from mistralai.client import Mistral  # pip install mistralai
             except ImportError:
                 raise ImportError("mistralai package not installed — run: pip install mistralai")
             import os
