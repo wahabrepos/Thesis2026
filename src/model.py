@@ -124,10 +124,39 @@ class GeneratorModule:
         self.api_fallback_max_calls = int(fb_config.get("max_api_calls_per_session", 10))
         self._api_call_count        = 0   # session counter
 
-        # Load model (device selected inside _load_model after model is placed)
-        self._load_model()
-        self.device = next(self.model.parameters()).device
-        logger.info(f"Model loaded on device: {self.device}")
+        # Load model (device selected inside _load_model after model is placed).
+        # If loading fails AND api_fallback is enabled, degrade gracefully to API-only
+        # mode so the pipeline can still serve queries without a local model.
+        self._use_api_only = False
+        try:
+            self._load_model()
+            self.device = next(self.model.parameters()).device
+            logger.info(f"Model loaded on device: {self.device}")
+        except Exception as load_err:
+            if self.api_fallback_enabled:
+                logger.warning(
+                    f"Local model failed to load ({load_err}). "
+                    f"API fallback is enabled — running in API-only mode "
+                    f"({self.api_fallback_provider}/{self.api_fallback_model})."
+                )
+                self.model    = None
+                self.device   = torch.device("cpu")
+                self._use_api_only = True
+
+                # After a failed 4-bit GPU load the CUDA context can be left
+                # corrupt (e.g. the Jetson NVML assert at CUDACachingAllocator:838).
+                # Subsequent CPU-only operations (embedding model, FAISS) can still
+                # crash if PyTorch's CUDA dispatcher fires internally.
+                # Patching is_available() to False forces all downstream code to use
+                # the pure-CPU path and avoids a silent segfault.
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                torch.cuda.is_available = lambda: False  # type: ignore[method-assign]
+                logger.info("CUDA disabled for remainder of process (corrupted context)")
+            else:
+                raise
     
     def _default_system_prompt(self) -> str:
         """Default system prompt for medical QA."""
@@ -733,9 +762,14 @@ Provide your answer in the JSON format specified in the system prompt."""
         Returns:
             Tuple of (answer, rationale, confidence, citations)
         """
+        # API-only mode: local model failed to load, go straight to cloud LLM
+        if self._use_api_only:
+            logger.info("API-only mode — skipping local model")
+            return self._generate_via_api(query, context, history)
+
         # Construct prompt
         prompt = self._construct_prompt(query, context, history)
-        
+
         # Generate with retries for JSON mode
         local_result: Optional[Tuple[str, List[str], float, List[str]]] = None
 
