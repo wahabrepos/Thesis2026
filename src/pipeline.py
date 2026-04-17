@@ -1,6 +1,6 @@
 """
 MedRAG Pipeline - High-Level API
-Provides easy-to-use interface for medical question answering
+Interface for medical question answering
 """
 
 import logging
