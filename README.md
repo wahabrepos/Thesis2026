@@ -1,4 +1,4 @@
-# Self-verifying clinical Reasoning on the MedRAG Production — Engineering Log & Deployment Guide
+# Self-verifying clinical Reasoning on the MedRAG Production —Guide
 
 **Production-ready Self-Reflective RAG for medical question answering, deployed on NVIDIA Jetson Orin Nano Super (8 GB unified memory)**
 
