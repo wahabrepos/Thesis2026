@@ -95,7 +95,7 @@ User Query
 ### One-time setup
 
 ```bash
-cd ~/Downloads/Papers/Codes/self-medrag-production
+cd ~/Downloads/Thesis/Codes/self-medrag-production
 
 # Create virtualenv
 python3 -m venv venv
