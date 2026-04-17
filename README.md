@@ -1,8 +1,8 @@
 # Self-verifying clinical Reasoning on the MedRAG Production —Guide
 
 **Self-Reflective RAG for medical question answering, deployed on NVIDIA Jetson Orin Nano Super (8 GB unified memory)**
-This guide is the implementation of my thesis titled "Query Engineering for Medical Dataset Based on RAG Retrieval"
-This document covers the complete development history: every bug encountered, every fix applied, every parameter tuned, and the outputs observed at each stage. It serves both as a reproducibility guide and an honest engineering journal of what it took to run a modern LLM-based pipeline on edge hardware.
+This guide is the implementation of my thesis titled "**Query Engineering for Medical Dataset Based on RAG Retrieval**"
+This document covers the complete development history: bug encountered, fix applied, parameter tuned, and the outputs observed at each stage.
 
 ---
 
