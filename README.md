@@ -32,7 +32,7 @@ Self-MedRAG is an iterative Retrieval-Augmented Generation system for medical qu
 3. **Verifies** each rationale statement against retrieved context using NLI (DeBERTa-v3)
 4. **Iterates** (up to 3×) if the support score is below threshold, refining the query and answer
 
-The entire pipeline runs on a local-device.
+The entire pipeline runs on a local-device stated below.
 
 ---
 
