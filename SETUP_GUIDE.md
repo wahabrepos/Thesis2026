@@ -1,4 +1,4 @@
-# Self-verifying clinical Reasoning on the MedRAG Production —Guide: Production-Ready Medical Question Answering System
+# Self-verifying clinical Reasoning on the MedRAG Production —Guide: Medical Question Answering System
 
 **Optimized for NVIDIA Jetson Orin Nano Super**
 
