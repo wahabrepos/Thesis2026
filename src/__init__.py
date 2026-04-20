@@ -1,5 +1,5 @@
 """
-Self-MedRAG Production Package
+Self-verifying clinical Reasoning on the LOOP MedRAG Production Package
 Medical Question Answering with Self-Reflective RAG
 """
 
