@@ -1,5 +1,5 @@
 """
-Self-verifying clinical Reasoning on the LOOP MedRAG Pipeline - High-Level API
+MedRAG Pipeline - High-Level API
 Interface for medical question answering
 """
 

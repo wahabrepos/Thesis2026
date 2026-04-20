@@ -53,8 +53,6 @@ cache/*
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
-# Miscellaneous
-SETUP_GUIDE.md
 
 # OS
 .DS_Store
