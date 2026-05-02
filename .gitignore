@@ -72,3 +72,6 @@ htmlcov/
 # Temporary files
 *.tmp
 temp/
+
+# Generated history report (may contain sensitive data)
+history_report/
