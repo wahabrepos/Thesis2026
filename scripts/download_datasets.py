@@ -30,19 +30,34 @@ def download_medqa(output_dir: Path, split: str = "train"):
 
         data = []
         for item in dataset:
-            options_dict = item.get("options", {})
-            # Preserve alphabetical order: A, B, C, D (and E if present)
-            sorted_keys = sorted(options_dict.keys())
-            options_list = [options_dict[k] for k in sorted_keys]
+            # openlifescienceai/medqa nests all fields inside item["data"]
+            inner = item.get("data", item)   # fall back to item itself if flat schema
 
-            correct_letter = str(item.get("answer", "")).strip().upper()
-            correct_text = options_dict.get(correct_letter, "")
+            question_text   = str(inner.get("Question",        inner.get("question",       ""))).strip()
+            options_raw     =     inner.get("Options",         inner.get("options",         {}))
+            correct_letter  = str(inner.get("Correct Option",  inner.get("answer_letter",   ""))).strip().upper()
+            correct_text    = str(inner.get("Correct Answer",  inner.get("answer",          ""))).strip()
+
+            # options_raw may be a dict {"A": "...", "B": "...", ...} or a list
+            if isinstance(options_raw, dict):
+                sorted_keys  = sorted(options_raw.keys())
+                options_list = [str(options_raw[k]).strip() for k in sorted_keys]
+                # Derive correct_letter from correct_text if missing
+                if not correct_letter and correct_text:
+                    for k, v in options_raw.items():
+                        if str(v).strip().lower() == correct_text.lower():
+                            correct_letter = k.upper()
+                            break
+            elif isinstance(options_raw, list):
+                options_list = [str(o).strip() for o in options_raw]
+            else:
+                options_list = []
 
             data.append({
-                "question":      item.get("question", "").strip(),
-                "options":       options_list,         # ["text_A", "text_B", "text_C", "text_D"]
-                "answer_letter": correct_letter,        # "A" | "B" | "C" | "D"
-                "answer":        correct_text,          # full text of the correct option
+                "question":      question_text,
+                "options":       options_list,    # ["text_A", "text_B", "text_C", "text_D"]
+                "answer_letter": correct_letter,  # "A" | "B" | "C" | "D"
+                "answer":        correct_text,    # full text of the correct option
             })
 
         output_file = output_dir / f"medqa_{split}.json"
