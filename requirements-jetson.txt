@@ -9,9 +9,11 @@
 transformers>=4.36.0
 accelerate>=0.25.0
 
-# BitsAndBytes for Jetson (build from source recommended)
-# git clone https://github.com/TimDettmers/bitsandbytes.git
-# cd bitsandbytes && CUDA_VERSION=122 make cuda12x && python setup.py install
+# BitsAndBytes for Jetson — must be >=0.46.1 for NF4 4-bit loading.
+# Build from source against JetPack CUDA (pre-built wheels fail on aarch64):
+#   git clone https://github.com/TimDettmers/bitsandbytes.git
+#   cd bitsandbytes && git checkout v0.46.1
+#   CUDA_VERSION=122 make cuda12x && python setup.py install
 
 # Retrieval
 sentence-transformers>=2.2.0
