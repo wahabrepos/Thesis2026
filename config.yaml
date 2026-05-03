@@ -120,11 +120,16 @@ generator:
     provider: "mistral"
     model: "mistral-small-latest"
     use_when_confidence_below: 0.6
-    max_api_calls_per_session: 10
+    # 1000 questions × max 3 iterations = 3000 calls maximum for a full evaluation run.
+    max_api_calls_per_session: 3000
 
 self_reflection:
   nli_model: "models/nli-deberta-v3-base"
-  verification_threshold: 0.5
+  # τ = per-statement entailment threshold. At 0.5 every API-generated statement
+  # trivially passes (the generator is conditioned on the same passages NLI checks
+  # against), so the refinement loop never fires. 0.7 is strict enough to catch
+  # genuinely unsupported claims while not being so tight that every query iterates.
+  verification_threshold: 0.7
   rationale_score_threshold: 0.7
   nli_batch_size: 16
   use_ensemble: false
