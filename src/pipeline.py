@@ -206,12 +206,13 @@ class MedRAGPipeline:
             result = self.query(question, return_details=False)
             
             predictions.append({
-                "final_answer": result["answer"],
-                "rationale": result["rationale"],
-                "iterations": result["iterations"],
+                "final_answer":  result["answer"],
+                "rationale":     result["rationale"],
+                "iterations":    result["iterations"],
                 "support_score": result["support_score"],
-                "confidence": result.get("confidence", 0.0),
-                "latency": result["latency"],
+                "confidence":    result.get("confidence", 0.0),
+                "latency":       result["latency"],
+                "dataset_type":  entry.get("dataset_type", dataset_name),
             })
             
             ground_truth.append({

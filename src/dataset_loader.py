@@ -25,11 +25,23 @@ class DatasetLoader:
                 Expected keys:
                     - experiment: { datasets: { medqa: <path>, pubmedqa: <path> }, sample_size: <int> }
         """
-        # Retrieve dataset file paths
+        # Retrieve dataset file paths.
+        # config.yaml stores each dataset as a nested dict {train_path, test_path};
+        # fall back to treating the value as a plain string for backwards compatibility.
         experiment_config = config.get("experiment", {})
         datasets_config = experiment_config.get("datasets", {})
-        self.medqa_path: str = datasets_config.get("medqa", "medqa.json")
-        self.pubmedqa_path: str = datasets_config.get("pubmedqa", "pubmedqa.json")
+
+        medqa_cfg = datasets_config.get("medqa", {})
+        self.medqa_path: str = (
+            medqa_cfg.get("test_path", "data/datasets/medqa_test.json")
+            if isinstance(medqa_cfg, dict) else str(medqa_cfg)
+        )
+
+        pubmedqa_cfg = datasets_config.get("pubmedqa", {})
+        self.pubmedqa_path: str = (
+            pubmedqa_cfg.get("test_path", "data/datasets/pubmedqa_test.json")
+            if isinstance(pubmedqa_cfg, dict) else str(pubmedqa_cfg)
+        )
 
         # Retrieve sample size with a default of 1000 if not specified
         self.sample_size: int = experiment_config.get("sample_size", 1000)
@@ -121,15 +133,54 @@ class DatasetLoader:
             df = df.sample(n=self.sample_size, random_state=42)
             logger.info(f"MedQA dataset sampled to {self.sample_size} entries.")
 
-        # Convert DataFrame rows to list of dictionaries
+        # Convert DataFrame rows to list of dictionaries.
+        # The question sent to the pipeline is pre-formatted with labelled options so
+        # the generator can output a single letter (A/B/C/D).  The ground-truth stored
+        # as "answer" is the option letter — exact letter matching in Evaluation is
+        # unambiguous and immune to paraphrase differences.
+        option_labels = "ABCDE"
         medqa_data = []
         for _, row in df.iterrows():
+            question_text = str(row["question"]).strip()
+            raw_options = row["options"] if isinstance(row["options"], list) else str(row["options"]).split(";")
+            options = [str(o).strip() for o in raw_options if str(o).strip()]
+
+            # Prefer pre-computed answer_letter (from download script); fall back to
+            # matching the answer text against the option list.
+            if "answer_letter" in df.columns and str(row["answer_letter"]).strip().upper() in option_labels:
+                correct_letter = str(row["answer_letter"]).strip().upper()
+            else:
+                answer_text = str(row["answer"]).strip().lower()
+                correct_letter = ""
+                for i, opt in enumerate(options):
+                    if opt.lower() == answer_text and i < len(option_labels):
+                        correct_letter = option_labels[i]
+                        break
+
+            # Build multi-choice prompt appended to the question
+            if options:
+                choices_block = "\n".join(
+                    f"{option_labels[i]}. {opt}"
+                    for i, opt in enumerate(options)
+                    if i < len(option_labels)
+                )
+                formatted_question = (
+                    f"{question_text}\n\n"
+                    f"Answer choices:\n{choices_block}\n\n"
+                    f"Output ONLY the single letter (A/B/C/D) of the correct answer."
+                )
+            else:
+                formatted_question = question_text
+
             entry = {
-                "question": str(row["question"]).strip(),
-                "options": row["options"] if isinstance(row["options"], list) else str(row["options"]).split(";"),
-                "answer": str(row["answer"]).strip()
+                "question":      formatted_question,
+                "options":       options,
+                "answer":        correct_letter or str(row["answer"]).strip(),
+                "answer_text":   str(row["answer"]).strip(),
+                "dataset_type":  "medqa",
             }
             medqa_data.append(entry)
+
         logger.info(f"Preprocessed MedQA dataset with {len(medqa_data)} entries.")
         return medqa_data
 

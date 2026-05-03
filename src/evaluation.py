@@ -4,6 +4,7 @@ Includes accuracy, F1, iteration stats, and groundedness metrics
 """
 
 import logging
+import re
 from typing import Any, Dict, List
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
@@ -33,6 +34,47 @@ class Evaluation:
     def normalize_text(self, text: str) -> str:
         """Normalize text for comparison."""
         return text.strip().lower()
+
+    @staticmethod
+    def extract_option_letter(text: str) -> str:
+        """Extract first A-E option letter from model output.
+
+        Handles: "A", "A.", "A)", "(A)", "The answer is A", "A. Penicillin", etc.
+        Returns the uppercase letter, or "" if none found.
+        """
+        # Highest priority: standalone letter at the very start
+        m = re.match(r"^\s*([A-Ea-e])[.\):\s]", text)
+        if m:
+            return m.group(1).upper()
+        # "answer is A", "correct answer: B", etc.
+        m = re.search(r"\b(?:answer|option|choice)\s*(?:is|:)?\s*([A-Ea-e])\b", text, re.IGNORECASE)
+        if m:
+            return m.group(1).upper()
+        # Parenthesised: (A), [B]
+        m = re.search(r"[(\[]([A-Ea-e])[)\]]", text)
+        if m:
+            return m.group(1).upper()
+        # Any isolated A-E letter as a word
+        m = re.search(r"\b([A-Ea-e])\b", text)
+        if m:
+            return m.group(1).upper()
+        return ""
+
+    @staticmethod
+    def extract_binary_answer(text: str) -> str:
+        """Extract yes/no from model output for PubMedQA."""
+        t = text.strip().lower()
+        if t in ("yes", "no"):
+            return t
+        # "yes, ..." or "no, ..."
+        m = re.match(r"^(yes|no)[^a-z]", t)
+        if m:
+            return m.group(1)
+        # Anywhere in text
+        for word in ("yes", "no"):
+            if re.search(rf"\b{word}\b", t):
+                return word
+        return t  # fall through to exact match
     
     def evaluate(
         self,
@@ -64,10 +106,21 @@ class Evaluation:
         confidences = []
         latencies = []
         
+        dataset_type = predictions[0].get("dataset_type", "pubmedqa") if predictions else "pubmedqa"
+
         for pred, gt in zip(predictions, ground_truth):
-            # Answers
-            pred_ans = self.normalize_text(pred.get("final_answer", ""))
-            gt_ans = self.normalize_text(gt.get("answer", ""))
+            raw_pred = pred.get("final_answer", "")
+            raw_gt   = gt.get("answer", "")
+
+            if dataset_type == "medqa":
+                # Ground truth is an option letter (A-E); extract letter from prediction.
+                pred_ans = self.extract_option_letter(raw_pred) or self.normalize_text(raw_pred)
+                gt_ans   = self.normalize_text(raw_gt)
+            else:
+                # PubMedQA: extract bare yes/no from potentially verbose output.
+                pred_ans = self.extract_binary_answer(raw_pred)
+                gt_ans   = self.normalize_text(raw_gt)
+
             pred_answers.append(pred_ans)
             gt_answers.append(gt_ans)
             

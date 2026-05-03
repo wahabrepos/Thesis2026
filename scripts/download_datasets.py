@@ -10,28 +10,47 @@ from datasets import load_dataset
 
 
 def download_medqa(output_dir: Path, split: str = "train"):
-    """Download MedQA dataset."""
+    """Download MedQA USMLE dataset from HuggingFace.
+
+    The HuggingFace schema for openlifescienceai/medqa is:
+      question: str
+      options:  dict  {"A": "...", "B": "...", "C": "...", "D": "..."}
+      answer:   str   "A" | "B" | "C" | "D"
+
+    We store:
+      question:       original question text (no options appended — that happens in dataset_loader)
+      options:        list of option texts in A-B-C-D order
+      answer_letter:  correct option letter ("A" … "E")
+      answer:         correct option text (for human readability)
+    """
     print(f"Downloading MedQA ({split} split)...")
-    
+
     try:
         dataset = load_dataset("openlifescienceai/medqa", split=split)
-        
-        # Convert to JSON format
+
         data = []
         for item in dataset:
+            options_dict = item.get("options", {})
+            # Preserve alphabetical order: A, B, C, D (and E if present)
+            sorted_keys = sorted(options_dict.keys())
+            options_list = [options_dict[k] for k in sorted_keys]
+
+            correct_letter = str(item.get("answer", "")).strip().upper()
+            correct_text = options_dict.get(correct_letter, "")
+
             data.append({
-                "question": item.get("question", ""),
-                "options": item.get("options", {}).get("A", []),  # Simplified
-                "answer": item.get("answer", ""),
+                "question":      item.get("question", "").strip(),
+                "options":       options_list,         # ["text_A", "text_B", "text_C", "text_D"]
+                "answer_letter": correct_letter,        # "A" | "B" | "C" | "D"
+                "answer":        correct_text,          # full text of the correct option
             })
-        
-        # Save
+
         output_file = output_dir / f"medqa_{split}.json"
         with open(output_file, "w") as f:
             json.dump(data, f, indent=2)
-        
+
         print(f"✓ Saved {len(data)} samples to {output_file}")
-        
+
     except Exception as e:
         print(f"✗ Failed to download MedQA: {e}")
 
