@@ -200,7 +200,12 @@ class MedRAGPipeline:
         
         for entry in dataset:
             question = entry.get("question", "")
-            answer_gt = entry.get("answer", "")
+            # For MedQA use the option letter as ground truth (model outputs a letter).
+            # For PubMedQA use the answer text ("yes"/"no").
+            if entry.get("dataset_type") == "medqa" and entry.get("answer_letter"):
+                answer_gt = entry["answer_letter"]
+            else:
+                answer_gt = entry.get("answer", "")
             
             # Get prediction
             result = self.query(question, return_details=False)
