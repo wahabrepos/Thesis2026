@@ -82,6 +82,8 @@ class RetrievalModule:
         # Retrieve BM25 configuration
         bm25_config: Dict[str, Any] = config.get("retrieval", {}).get("bm25", {})
         self.use_idf: bool = bm25_config.get("use_idf", True)
+        self.bm25_k1: float = float(bm25_config.get("k1", 1.5))
+        self.bm25_b: float  = float(bm25_config.get("b",  0.75))
 
         # Retrieve dense retrieval configuration
         dense_config: Dict[str, Any] = config.get("retrieval", {}).get("dense", {})
@@ -116,9 +118,9 @@ class RetrievalModule:
         else:
             self.corpus = corpus
 
-        # Build BM25 index on tokenized corpus
+        # Build BM25 index on tokenized corpus with explicit k1 and b from config.
         tokenized_corpus: List[List[str]] = [self._tokenize(doc) for doc in self.corpus]
-        self.bm25: BM25Okapi = BM25Okapi(tokenized_corpus)
+        self.bm25: BM25Okapi = BM25Okapi(tokenized_corpus, k1=self.bm25_k1, b=self.bm25_b)
         logger.info("BM25 index built on the corpus.")
 
         # Set up dense retrieval: keep on CPU to reserve GPU memory for the generator
@@ -182,23 +184,23 @@ class RetrievalModule:
 
         logger.info("Building dense index (this runs once — will be cached to disk)...")
 
-        # Batch embedding — batch_size=8 + max_length=256 balances speed vs truncation on ARM CPU
-        batch_size = 8
+        # Batch embedding.
+        # max_length=512 matches the corpus chunk_size so the full chunk is visible.
+        # BGE-small-en-v1.5 uses CLS-token pooling (position 0), not mean pooling —
+        # the model is contrastive-trained to concentrate sentence semantics in [CLS].
+        # Batch size 4 at max_length=512 keeps peak RAM under ~1.2 GiB on ARM CPU.
+        batch_size = 4
         all_embeddings: List[np.ndarray] = []
         for batch_start in range(0, len(self.corpus), batch_size):
             batch = self.corpus[batch_start: batch_start + batch_size]
             inputs = self.dense_tokenizer(
                 batch, return_tensors="pt", truncation=True,
-                max_length=256, padding=True
+                max_length=512, padding=True
             )
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             with torch.no_grad():
                 outputs = self.dense_model(**inputs)
-            token_embeddings = outputs.last_hidden_state
-            attention_mask = inputs["attention_mask"].unsqueeze(-1)
-            sum_embeddings = torch.sum(token_embeddings * attention_mask, dim=1)
-            sum_mask = torch.clamp(attention_mask.sum(dim=1), min=1e-9)
-            embeddings = sum_embeddings / sum_mask
+            embeddings = outputs.last_hidden_state[:, 0, :]   # CLS token
             embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
             all_embeddings.append(embeddings.cpu().numpy())
             if (batch_start // batch_size) % 500 == 0 and batch_start > 0:
@@ -242,11 +244,8 @@ class RetrievalModule:
         inputs = {key: tensor.to(self.device) for key, tensor in inputs.items()}
         with torch.no_grad():
             outputs = self.dense_model(**inputs)
-        token_embeddings = outputs.last_hidden_state  # shape: (1, seq_len, hidden_dim)
-        attention_mask = inputs["attention_mask"].unsqueeze(-1)  # shape: (1, seq_len, 1)
-        sum_embeddings = torch.sum(token_embeddings * attention_mask, dim=1)
-        sum_mask = torch.clamp(attention_mask.sum(dim=1), min=1e-9)
-        query_embedding = sum_embeddings / sum_mask
+        # CLS-token pooling — must match the index-build path above.
+        query_embedding = outputs.last_hidden_state[:, 0, :]
         query_embedding = torch.nn.functional.normalize(query_embedding, p=2, dim=1)
         query_vec: np.ndarray = query_embedding.cpu().numpy().astype("float32")
 
