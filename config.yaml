@@ -124,6 +124,8 @@ generator:
     max_api_calls_per_session: 3000
 
 self_reflection:
+  # Local cache of cross-encoder/nli-deberta-v3-base (184 M params, MNLI fine-tuned).
+  # Set to "cross-encoder/nli-deberta-v3-base" to pull from HuggingFace if not cached.
   nli_model: "models/nli-deberta-v3-base"
   # τ = per-statement entailment threshold. At 0.5 every API-generated statement
   # trivially passes (the generator is conditioned on the same passages NLI checks

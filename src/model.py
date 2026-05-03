@@ -862,8 +862,10 @@ class SelfReflectiveModule:
         self.config = config
         sr_config = config.get("self_reflection", {})
         
-        # NLI model
-        self.nli_model_name = sr_config.get("nli_model", "microsoft/deberta-v3-base-mnli")
+        # NLI model — default matches the thesis description.
+        # cross-encoder/nli-deberta-v3-base: MNLI fine-tuned, label order 0=contradiction
+        # 1=neutral 2=entailment (same as microsoft/deberta-v3-base-mnli).
+        self.nli_model_name = sr_config.get("nli_model", "cross-encoder/nli-deberta-v3-base")
         
         # Thresholds
         self.verification_threshold = float(sr_config.get("verification_threshold", 0.5))
