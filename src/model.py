@@ -762,10 +762,27 @@ Provide your answer in the JSON format specified in the system prompt."""
         Returns:
             Tuple of (answer, rationale, confidence, citations)
         """
-        # API-only mode: local model failed to load, go straight to cloud LLM
+        # API-only mode: local model failed to load, go straight to cloud LLM.
+        # Apply the same session-budget check that the normal fallback path uses so
+        # the counter is meaningful and the limit is consistently enforced.
         if self._use_api_only:
-            logger.info("API-only mode — skipping local model")
-            return self._generate_via_api(query, context, history)
+            if not self.api_fallback_enabled:
+                raise RuntimeError(
+                    "Local model unavailable and api_fallback.enabled is false — "
+                    "cannot serve query."
+                )
+            if self._api_call_count >= self.api_fallback_max_calls:
+                raise RuntimeError(
+                    f"API call budget exhausted ({self.api_fallback_max_calls} calls). "
+                    "Increase max_api_calls_per_session in config.yaml."
+                )
+            logger.info(
+                f"API-only mode — call #{self._api_call_count + 1}/"
+                f"{self.api_fallback_max_calls}"
+            )
+            result = self._generate_via_api(query, context, history)
+            self._api_call_count += 1
+            return result
 
         # Construct prompt
         prompt = self._construct_prompt(query, context, history)
