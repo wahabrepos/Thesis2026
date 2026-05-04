@@ -59,9 +59,16 @@ def parse_args():
         "--resume",
         type=str,
         default=None,
-        help="Path to checkpoint to resume from"
+        help="Path to checkpoint file to resume from (auto-generated if omitted)"
     )
-    
+
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=50,
+        help="Save checkpoint after this many queries (default: 50)"
+    )
+
     parser.add_argument(
         "--output",
         type=str,
@@ -139,10 +146,21 @@ def main():
             print(f"\n{'='*60}")
             print(f"Evaluating on {dataset_name.upper()}")
             print(f"{'='*60}\n")
-            
+
+            # Auto-generate checkpoint path per dataset if not provided via --resume
+            if args.resume:
+                ckpt_path = args.resume
+            else:
+                Path("./checkpoints").mkdir(parents=True, exist_ok=True)
+                ckpt_path = f"./checkpoints/{dataset_name}_checkpoint.json"
+
+            print(f"Checkpoint file: {ckpt_path}  (every {args.checkpoint_every} queries)")
+
             results = pipeline.evaluate_dataset(
                 dataset_name=dataset_name,
-                max_samples=args.samples
+                max_samples=args.samples,
+                checkpoint_path=ckpt_path,
+                checkpoint_every=args.checkpoint_every,
             )
             
             all_results[dataset_name] = results

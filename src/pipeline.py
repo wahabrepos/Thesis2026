@@ -178,42 +178,93 @@ class MedRAGPipeline:
     def evaluate_dataset(
         self,
         dataset_name: str = "medqa",
-        max_samples: Optional[int] = None
+        max_samples: Optional[int] = None,
+        checkpoint_path: Optional[str] = None,
+        checkpoint_every: int = 50,
     ) -> Dict[str, Any]:
-        """Evaluate on a benchmark dataset."""
+        """Evaluate on a benchmark dataset with crash-safe checkpointing.
+
+        Args:
+            checkpoint_path: File to read/write incremental progress. If the
+                file exists on entry, completed predictions are loaded and the
+                run resumes from the next unanswered sample.
+            checkpoint_every: Save the checkpoint after this many new queries.
+        """
+        import json as _json
+        from datetime import datetime
+
         logger.info(f"Evaluating on {dataset_name}")
-        
+
         # Load dataset
         dataset_loader = DatasetLoader(self.config)
         datasets = dataset_loader.load_data()
-        
+
         if dataset_name not in datasets:
             raise ValueError(f"Dataset {dataset_name} not found")
-        
+
         dataset = datasets[dataset_name]
-        
-        # Limit samples if specified
+
         if max_samples:
             dataset = dataset[:max_samples]
-        
-        logger.info(f"Processing {len(dataset)} samples")
-        
-        # Process queries
-        predictions = []
-        ground_truth = []
-        
-        for entry in dataset:
-            question = entry.get("question", "")
-            # For MedQA use the option letter as ground truth (model outputs a letter).
-            # For PubMedQA use the answer text ("yes"/"no").
-            if entry.get("dataset_type") == "medqa" and entry.get("answer_letter"):
-                answer_gt = entry["answer_letter"]
-            else:
-                answer_gt = entry.get("answer", "")
-            
-            # Get prediction — pass dataset_type so binary tasks enforce yes/no output
-            result = self.query(question, return_details=False, dataset_type=entry.get("dataset_type", dataset_name))
-            
+
+        total_samples = len(dataset)
+        logger.info(f"Processing {total_samples} samples")
+
+        # ── Resume from checkpoint ────────────────────────────────────────────
+        predictions: list = []
+        ground_truth: list = []
+        start_index = 0
+
+        if checkpoint_path:
+            ckpt_file = Path(checkpoint_path)
+            if ckpt_file.exists():
+                try:
+                    ckpt = _json.loads(ckpt_file.read_text())
+                    predictions  = ckpt.get("predictions", [])
+                    ground_truth = ckpt.get("ground_truth", [])
+                    start_index  = len(predictions)
+                    logger.info(
+                        f"Resumed from checkpoint '{checkpoint_path}': "
+                        f"{start_index}/{total_samples} already done"
+                    )
+                    print(f"[checkpoint] Resuming at sample {start_index + 1}/{total_samples}")
+                except Exception as ckpt_err:
+                    logger.warning(f"Could not load checkpoint ({ckpt_err}), starting fresh")
+
+        def _save_checkpoint():
+            if not checkpoint_path:
+                return
+            ckpt_file = Path(checkpoint_path)
+            ckpt_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = ckpt_file.with_suffix(".tmp")
+            tmp.write_text(_json.dumps({
+                "dataset":      dataset_name,
+                "total":        total_samples,
+                "completed":    len(predictions),
+                "predictions":  predictions,
+                "ground_truth": ground_truth,
+                "saved_at":     datetime.utcnow().isoformat(),
+            }, indent=2))
+            tmp.replace(ckpt_file)   # atomic rename — safe against mid-write crashes
+            logger.info(f"Checkpoint saved: {len(predictions)}/{total_samples}")
+
+        # ── Main evaluation loop ──────────────────────────────────────────────
+        queries_since_save = 0
+
+        for i, entry in enumerate(dataset):
+            if i < start_index:
+                continue   # already completed in a previous run
+
+            question  = entry.get("question", "")
+            dtype     = entry.get("dataset_type", dataset_name)
+            answer_gt = (
+                entry["answer_letter"]
+                if dtype == "medqa" and entry.get("answer_letter")
+                else entry.get("answer", "")
+            )
+
+            result = self.query(question, return_details=False, dataset_type=dtype)
+
             predictions.append({
                 "final_answer":  result["answer"],
                 "rationale":     result["rationale"],
@@ -221,23 +272,40 @@ class MedRAGPipeline:
                 "support_score": result["support_score"],
                 "confidence":    result.get("confidence", 0.0),
                 "latency":       result["latency"],
-                "dataset_type":  entry.get("dataset_type", dataset_name),
+                "dataset_type":  dtype,
             })
-            
-            ground_truth.append({
-                "answer": answer_gt
-            })
-        
-        # Evaluate
-        evaluator = Evaluation()
-        metrics = evaluator.evaluate(predictions, ground_truth)
-        
-        # Error analysis
+            ground_truth.append({"answer": answer_gt})
+
+            queries_since_save += 1
+            if queries_since_save >= checkpoint_every:
+                _save_checkpoint()
+                queries_since_save = 0
+
+            completed = len(predictions)
+            if completed % 10 == 0 or completed == total_samples:
+                logger.info(f"Progress: {completed}/{total_samples}")
+
+        # Final checkpoint flush (catches the tail that didn't hit the interval)
+        _save_checkpoint()
+
+        # ── Metrics ───────────────────────────────────────────────────────────
+        evaluator    = Evaluation()
+        metrics      = evaluator.evaluate(predictions, ground_truth)
         error_analysis = evaluator.error_analysis(predictions, ground_truth)
-        
+
+        # Remove checkpoint now that the run finished cleanly
+        if checkpoint_path:
+            ckpt_file = Path(checkpoint_path)
+            if ckpt_file.exists():
+                try:
+                    ckpt_file.unlink()
+                    logger.info(f"Checkpoint deleted after successful run")
+                except OSError:
+                    pass
+
         return {
             "dataset": dataset_name,
-            "num_samples": len(dataset),
+            "num_samples": total_samples,
             "metrics": metrics,
             "error_analysis": error_analysis,
             "predictions": predictions,
