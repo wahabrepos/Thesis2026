@@ -410,14 +410,15 @@ Provide your answer in the JSON format specified in the system prompt."""
         self,
         query: str,
         context: List[str],
-        history: List[Dict[str, Any]]
+        history: List[Dict[str, Any]],
+        dataset_type: str = None,
     ) -> str:
         """Construct prompt from query, context, and history."""
         # Format context
         context_text = "\n\n".join(
             [f"[Passage {i+1}]: {passage}" for i, passage in enumerate(context)]
         )
-        
+
         # Format history
         history_text = ""
         if history:
@@ -431,7 +432,19 @@ Provide your answer in the JSON format specified in the system prompt."""
             history_text = "\n".join(history_entries)
             if history_text:
                 history_text = f"\nPREVIOUS ATTEMPTS:\n{history_text}\n"
-        
+
+        # For binary yes/no tasks, append an explicit constraint so the model
+        # does not hedge or elaborate in the "answer" field.
+        binary_instruction = ""
+        if dataset_type == "pubmedqa":
+            binary_instruction = (
+                "\n\nCRITICAL CONSTRAINT: This is a binary question. "
+                "The \"answer\" field in your JSON MUST be exactly the single word "
+                "\"yes\" or \"no\" (lowercase). Do NOT write anything else in the "
+                "answer field — no explanations, no qualifications, no punctuation. "
+                "Put all reasoning in the \"rationale\" field."
+            )
+
         # Build prompt based on model type
         if self.model_type == "causal":
             # Chat format for causal models (Mistral, Llama)
@@ -448,7 +461,10 @@ Provide your answer in the JSON format specified in the system prompt."""
                 history=history_text,
                 query=query
             )
-        
+
+        if binary_instruction:
+            prompt += binary_instruction
+
         return prompt
     
     def _generate_text(self, prompt: str) -> str:
@@ -640,6 +656,7 @@ Provide your answer in the JSON format specified in the system prompt."""
         query: str,
         context: List[str],
         history: List[Dict[str, Any]],
+        dataset_type: str = None,
     ) -> Tuple[str, List[str], float, List[str]]:
         """
         Generate an answer via a cloud LLM API (Anthropic, Mistral, or OpenAI).
@@ -651,7 +668,7 @@ Provide your answer in the JSON format specified in the system prompt."""
         Returns:
             Tuple of (answer, rationale, confidence, citations)
         """
-        prompt = self._construct_prompt(query, context, history)
+        prompt = self._construct_prompt(query, context, history, dataset_type=dataset_type)
 
         # Split into system / user parts the same way _generate_text() does
         sys_text  = self.system_prompt.strip()
@@ -754,11 +771,12 @@ Provide your answer in the JSON format specified in the system prompt."""
         self,
         query: str,
         context: List[str],
-        history: List[Dict[str, Any]]
+        history: List[Dict[str, Any]],
+        dataset_type: str = None,
     ) -> Tuple[str, List[str], float, List[str]]:
         """
         Generate answer with rationale and confidence.
-        
+
         Returns:
             Tuple of (answer, rationale, confidence, citations)
         """
@@ -780,12 +798,12 @@ Provide your answer in the JSON format specified in the system prompt."""
                 f"API-only mode — call #{self._api_call_count + 1}/"
                 f"{self.api_fallback_max_calls}"
             )
-            result = self._generate_via_api(query, context, history)
+            result = self._generate_via_api(query, context, history, dataset_type=dataset_type)
             self._api_call_count += 1
             return result
 
         # Construct prompt
-        prompt = self._construct_prompt(query, context, history)
+        prompt = self._construct_prompt(query, context, history, dataset_type=dataset_type)
 
         # Generate with retries for JSON mode
         local_result: Optional[Tuple[str, List[str], float, List[str]]] = None
@@ -837,7 +855,7 @@ Provide your answer in the JSON format specified in the system prompt."""
                 f"{self.api_fallback_provider}/{self.api_fallback_model}"
             )
             try:
-                api_result = self._generate_via_api(query, context, history)
+                api_result = self._generate_via_api(query, context, history, dataset_type=dataset_type)
                 self._api_call_count += 1
                 logger.info(
                     f"API fallback succeeded (session calls: {self._api_call_count}/"

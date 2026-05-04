@@ -45,7 +45,7 @@ class Trainer:
         
         logger.info(f"Trainer initialized: max_iterations={self.max_iterations}")
     
-    def run(self, query: str) -> Tuple[str, List[str], int, float, List[Dict[str, Any]]]:
+    def run(self, query: str, dataset_type: str = None) -> Tuple[str, List[str], int, float, List[Dict[str, Any]]]:
         """
         Execute iterative loop for a query.
         
@@ -89,7 +89,8 @@ class Trainer:
                 answer, rationale, confidence, citations = self.generator.generate(
                     current_query,
                     fused_context,
-                    history
+                    history,
+                    dataset_type=dataset_type,
                 )
                 
                 logger.info(f"Generated answer with {len(rationale)} rationale statements")

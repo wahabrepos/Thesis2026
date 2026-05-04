@@ -92,24 +92,28 @@ class MedRAGPipeline:
     def query(
         self,
         question: str,
-        return_details: bool = False
+        return_details: bool = False,
+        dataset_type: str = None,
     ) -> Dict[str, Any]:
         """
         Answer a single medical question.
-        
+
         Args:
             question: Medical question to answer
             return_details: Whether to return detailed iteration history
-        
+            dataset_type: Dataset type hint ("pubmedqa" enforces binary yes/no answer)
+
         Returns:
             Dictionary with answer, rationale, confidence, etc.
         """
         start_time = time.time()
-        
+
         logger.info(f"Processing query: '{question[:100]}...'")
-        
+
         # Run iterative loop
-        answer, rationale, iterations, support_score, history = self.trainer.run(question)
+        answer, rationale, iterations, support_score, history = self.trainer.run(
+            question, dataset_type=dataset_type
+        )
         
         elapsed_time = time.time() - start_time
         
@@ -207,8 +211,8 @@ class MedRAGPipeline:
             else:
                 answer_gt = entry.get("answer", "")
             
-            # Get prediction
-            result = self.query(question, return_details=False)
+            # Get prediction — pass dataset_type so binary tasks enforce yes/no output
+            result = self.query(question, return_details=False, dataset_type=entry.get("dataset_type", dataset_name))
             
             predictions.append({
                 "final_answer":  result["answer"],
