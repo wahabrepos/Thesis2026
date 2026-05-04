@@ -114,8 +114,9 @@ class Evaluation:
 
             if dataset_type == "medqa":
                 # Ground truth is an option letter (A-E); extract letter from prediction.
-                pred_ans = self.extract_option_letter(raw_pred) or self.normalize_text(raw_pred)
-                gt_ans   = self.normalize_text(raw_gt)
+                # Both sides lowercased so "B" == "b".
+                pred_ans = (self.extract_option_letter(raw_pred) or self.normalize_text(raw_pred)).lower()
+                gt_ans   = self.normalize_text(raw_gt).lower()
             else:
                 # PubMedQA: extract bare yes/no from potentially verbose output.
                 pred_ans = self.extract_binary_answer(raw_pred)
