@@ -686,6 +686,25 @@ Provide your answer in the JSON format specified in the system prompt."""
 
         raw_text = ""
 
+        def _with_retry(call_fn, max_attempts: int = 6):
+            """Retry transient API errors (429 rate-limit, 5xx outages) with exponential back-off."""
+            import time as _time
+            for attempt in range(max_attempts):
+                try:
+                    return call_fn()
+                except Exception as exc:
+                    msg = str(exc)
+                    retryable = any(c in msg for c in ("429", "503", "502", "504", "rate", "Rate", "Too Many"))
+                    if retryable and attempt < max_attempts - 1:
+                        wait = min(2 ** attempt, 60)  # 1 2 4 8 16 60 seconds
+                        logger.warning(
+                            f"API transient error (attempt {attempt + 1}/{max_attempts}): "
+                            f"{msg[:120]} — retrying in {wait}s"
+                        )
+                        _time.sleep(wait)
+                    else:
+                        raise
+
         # ── Anthropic (Claude) ────────────────────────────────────────────────
         if provider == "anthropic":
             try:
@@ -698,12 +717,12 @@ Provide your answer in the JSON format specified in the system prompt."""
                 raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
 
             client   = anthropic.Anthropic(api_key=api_key)
-            response = client.messages.create(
+            response = _with_retry(lambda: client.messages.create(
                 model=model,
                 max_tokens=self.max_new_tokens,
                 system=sys_text,
                 messages=[{"role": "user", "content": user_text}],
-            )
+            ))
             raw_text = response.content[0].text
 
         # ── Mistral ───────────────────────────────────────────────────────────
@@ -718,14 +737,14 @@ Provide your answer in the JSON format specified in the system prompt."""
                 raise ValueError("MISTRAL_API_KEY environment variable is not set")
 
             client   = Mistral(api_key=api_key)
-            response = client.chat.complete(
+            response = _with_retry(lambda: client.chat.complete(
                 model=model,
                 messages=[
                     {"role": "system", "content": sys_text},
                     {"role": "user",   "content": user_text},
                 ],
                 max_tokens=self.max_new_tokens,
-            )
+            ))
             raw_text = response.choices[0].message.content
 
         # ── OpenAI ────────────────────────────────────────────────────────────
@@ -740,14 +759,14 @@ Provide your answer in the JSON format specified in the system prompt."""
                 raise ValueError("OPENAI_API_KEY environment variable is not set")
 
             client   = OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
+            response = _with_retry(lambda: client.chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": sys_text},
                     {"role": "user",   "content": user_text},
                 ],
                 max_tokens=self.max_new_tokens,
-            )
+            ))
             raw_text = response.choices[0].message.content
 
         else:
