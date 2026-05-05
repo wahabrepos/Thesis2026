@@ -687,16 +687,23 @@ Provide your answer in the JSON format specified in the system prompt."""
         raw_text = ""
 
         def _with_retry(call_fn, max_attempts: int = 6):
-            """Retry transient API errors (429 rate-limit, 5xx outages) with exponential back-off."""
+            """Retry transient API errors with back-off tuned per error class:
+            - 429 rate-limit: start at 15s (Mistral tier capacity resets slowly)
+            - 5xx server errors: start at 2s (transient, recovers fast)
+            """
             import time as _time
             for attempt in range(max_attempts):
                 try:
                     return call_fn()
                 except Exception as exc:
                     msg = str(exc)
-                    retryable = any(c in msg for c in ("429", "503", "502", "504", "rate", "Rate", "Too Many"))
-                    if retryable and attempt < max_attempts - 1:
-                        wait = min(2 ** attempt, 60)  # 1 2 4 8 16 60 seconds
+                    is_rate_limit = any(c in msg for c in ("429", "Too Many", "capacity exceeded", "rate"))
+                    is_server_err = any(c in msg for c in ("503", "502", "504"))
+                    if (is_rate_limit or is_server_err) and attempt < max_attempts - 1:
+                        # 429: 15 30 60 60 60 — give Mistral's quota window time to reset
+                        # 5xx:  2  4  8 16 32 — transient, recover quickly
+                        base = 15 if is_rate_limit else 2
+                        wait = min(base * (2 ** attempt), 60)
                         logger.warning(
                             f"API transient error (attempt {attempt + 1}/{max_attempts}): "
                             f"{msg[:120]} — retrying in {wait}s"
@@ -817,6 +824,10 @@ Provide your answer in the JSON format specified in the system prompt."""
                 f"API-only mode — call #{self._api_call_count + 1}/"
                 f"{self.api_fallback_max_calls}"
             )
+            import time as _time
+            # Minimum inter-call gap to stay within Mistral's per-second rate limit.
+            # Each query already takes ~9s total, but bursts can happen at startup.
+            _time.sleep(2)
             result = self._generate_via_api(query, context, history, dataset_type=dataset_type)
             self._api_call_count += 1
             return result
