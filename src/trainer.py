@@ -78,10 +78,14 @@ class Trainer:
                 retrieval_results = self.retrieval.retrieve(current_query)
                 bm25_results = retrieval_results.get("bm25", [])
                 dense_results = retrieval_results.get("dense", [])
-                fused_context = self.retrieval.fuse_results(bm25_results, dense_results)
-                # Trim to top_k — RRF returns all unique passages from both lists,
-                # but feeding all 19 to the generator and NLI explodes latency linearly.
-                fused_context = fused_context[: self.top_k]
+
+                retrieval_mode = self.config.get("retrieval", {}).get("mode", "hybrid")
+                if retrieval_mode == "bm25_only":
+                    fused_context = bm25_results[: self.top_k]
+                elif retrieval_mode == "dense_only":
+                    fused_context = dense_results[: self.top_k]
+                else:  # hybrid (default) — RRF fusion
+                    fused_context = self.retrieval.fuse_results(bm25_results, dense_results)[: self.top_k]
 
                 logger.info(f"Retrieved {len(fused_context)} passages (top_k={self.top_k})")
                 
