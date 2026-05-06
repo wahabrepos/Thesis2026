@@ -127,36 +127,55 @@ class GeneratorModule:
         # Load model (device selected inside _load_model after model is placed).
         # If loading fails AND api_fallback is enabled, degrade gracefully to API-only
         # mode so the pipeline can still serve queries without a local model.
+        #
+        # Fast-path: when use_when_confidence_below >= 1.0 every query will use the API
+        # regardless of local confidence. Skip the GPU load entirely — on Jetson Orin Nano
+        # a failed 4-bit NvMap allocation (ENOMEM) leaves the CUDA context corrupted and
+        # triggers a kernel watchdog reboot within minutes (NvMapMemAllocInternalTagged err 12).
         self._use_api_only = False
-        try:
-            self._load_model()
-            self.device = next(self.model.parameters()).device
-            logger.info(f"Model loaded on device: {self.device}")
-        except Exception as load_err:
-            if self.api_fallback_enabled:
-                logger.warning(
-                    f"Local model failed to load ({load_err}). "
-                    f"API fallback is enabled — running in API-only mode "
-                    f"({self.api_fallback_provider}/{self.api_fallback_model})."
-                )
-                self.model    = None
-                self.device   = torch.device("cpu")
-                self._use_api_only = True
+        _api_always = (
+            self.api_fallback_enabled
+            and self.api_fallback_threshold >= 1.0
+        )
+        if _api_always:
+            logger.info(
+                "API-always mode (use_when_confidence_below >= 1.0) — "
+                "skipping local model load to protect GPU driver stability. "
+                f"All generation via {self.api_fallback_provider}/{self.api_fallback_model}."
+            )
+            self.model = None
+            self.device = torch.device("cpu")
+            self._use_api_only = True
+        else:
+            try:
+                self._load_model()
+                self.device = next(self.model.parameters()).device
+                logger.info(f"Model loaded on device: {self.device}")
+            except Exception as load_err:
+                if self.api_fallback_enabled:
+                    logger.warning(
+                        f"Local model failed to load ({load_err}). "
+                        f"API fallback is enabled — running in API-only mode "
+                        f"({self.api_fallback_provider}/{self.api_fallback_model})."
+                    )
+                    self.model    = None
+                    self.device   = torch.device("cpu")
+                    self._use_api_only = True
 
-                # After a failed 4-bit GPU load the CUDA context can be left
-                # corrupt (e.g. the Jetson NVML assert at CUDACachingAllocator:838).
-                # Subsequent CPU-only operations (embedding model, FAISS) can still
-                # crash if PyTorch's CUDA dispatcher fires internally.
-                # Patching is_available() to False forces all downstream code to use
-                # the pure-CPU path and avoids a silent segfault.
-                try:
-                    torch.cuda.empty_cache()
-                except Exception:
-                    pass
-                torch.cuda.is_available = lambda: False  # type: ignore[method-assign]
-                logger.info("CUDA disabled for remainder of process (corrupted context)")
-            else:
-                raise
+                    # After a failed 4-bit GPU load the CUDA context can be left
+                    # corrupt (e.g. the Jetson NVML assert at CUDACachingAllocator:838).
+                    # Subsequent CPU-only operations (embedding model, FAISS) can still
+                    # crash if PyTorch's CUDA dispatcher fires internally.
+                    # Patching is_available() to False forces all downstream code to use
+                    # the pure-CPU path and avoids a silent segfault.
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    torch.cuda.is_available = lambda: False  # type: ignore[method-assign]
+                    logger.info("CUDA disabled for remainder of process (corrupted context)")
+                else:
+                    raise
     
     def _default_system_prompt(self) -> str:
         """Default system prompt for medical QA."""

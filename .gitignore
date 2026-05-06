@@ -75,3 +75,6 @@ temp/
 
 # Generated history report (may contain sensitive data)
 history_report/
+
+# Thesis working files (local only — never publish)
+Thesis Evaluation Values/
