@@ -78,3 +78,6 @@ history_report/
 
 # Thesis working files (local only — never publish)
 Thesis Evaluation Values/
+
+# Recovery script (local utility — not part of published codebase)
+recover_history.py

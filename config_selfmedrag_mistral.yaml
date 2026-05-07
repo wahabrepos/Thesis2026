@@ -1,0 +1,179 @@
+# =============================================================================
+# Self-MedRAG (Mistral API): Full pipeline — hybrid retrieval + self-reflection
+# Generator: Mistral-small-latest (API-always), DeBERTa NLI, max 3 iterations
+# Purpose: confirms the full self-reflective system accuracy on both benchmarks
+# =============================================================================
+
+system:
+  device: "cuda"
+  mixed_precision: true
+  quantization: "4bit"
+  max_memory_gb: 7.0
+  batch_size: 1
+  num_workers: 2
+  enable_caching: true
+  cache_dir: "./cache"
+
+corpus:
+  sources:
+    - type: "pubmed"
+      path: "./data/corpus/pubmed_abstracts.jsonl"
+      weight: 0.7
+      max_docs: 10000
+  chunk_size: 512
+  chunk_overlap: 50
+  min_chunk_length: 20
+  lowercase: true
+  remove_special_chars: false
+
+retrieval:
+  mode: "hybrid"
+  bm25:
+    use_idf: true
+    k1: 1.5
+    b: 0.75
+  dense:
+    model_name: "BAAI/bge-small-en-v1.5"
+    cache_dir: "models/bge-small-en-v1.5"
+    index_type: "faiss"
+    embedding_dimension: 384
+    normalize_embeddings: true
+  top_k: 5
+  min_score: 0.0
+  rrf:
+    k: 60
+    weight_bm25: 0.5
+    weight_dense: 0.5
+
+generator:
+  model_name: "models/qwen2.5-1.5b-4bit"
+  model_type: "causal"
+  fallback_model: "google/flan-t5-large"
+  fallback_model_type: "seq2seq"
+
+  load_in_4bit: true
+  load_in_8bit: false
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+
+  max_input_length: 1024
+  max_new_tokens: 400
+  min_new_tokens: 0
+  temperature: 0
+  top_p: 0.9
+  top_k: 50
+  do_sample: false
+  repetition_penalty: 1.0
+
+  use_json_mode: true
+  enforce_json: true
+  max_json_retries: 3
+
+  system_prompt: |
+    You are a medical AI assistant specialized in evidence-based clinical reasoning.
+    Base ALL claims on provided context. If context doesn't support a claim, state "insufficient evidence".
+
+    OUTPUT FORMAT (JSON):
+    {
+      "answer": "Brief answer",
+      "rationale": ["Reasoning step 1", "Step 2"],
+      "confidence": 0.85,
+      "citations": ["Context used"]
+    }
+
+  api_fallback:
+    # API-always: every query uses Mistral regardless of local confidence.
+    # Local Qwen load is skipped automatically (use_when_confidence_below >= 1.0).
+    enabled: true
+    provider: "mistral"
+    model: "mistral-small-latest"
+    use_when_confidence_below: 1.1
+    max_api_calls_per_session: 6000
+
+self_reflection:
+  nli_model: "models/nli-deberta-v3-base"
+  verification_threshold: 0.7
+  rationale_score_threshold: 0.7
+  nli_batch_size: 16
+  use_ensemble: false
+
+iteration:
+  max_iterations: 3        # full self-reflective loop
+  early_stopping: true
+  min_improvement: 0.05
+  max_time_seconds: 600
+  refinement_strategy: "structured"
+  include_history_in_prompt: true
+  max_history_entries: 2
+
+experiment:
+  datasets:
+    medqa:
+      train_path: "./data/datasets/medqa_train.json"
+      test_path: "./data/datasets/medqa_test.json"
+      type: "multiple_choice"
+    pubmedqa:
+      train_path: "./data/datasets/pubmedqa_train.json"
+      test_path: "./data/datasets/pubmedqa_test.json"
+      type: "binary"
+      filter_maybe: true
+  sample_size: 1000
+  random_seed: 42
+  shuffle: true
+  validation_split: 0.1
+
+evaluation:
+  metrics:
+    - "accuracy"
+    - "f1_score"
+    - "avg_iterations"
+    - "more_than_one_iter_pct"
+    - "avg_support_score"
+    - "avg_confidence"
+    - "latency_p50"
+    - "latency_p95"
+  save_predictions: true
+  save_path: "./results/predictions_{timestamp}.json"
+  save_history: true
+  error_analysis: true
+
+checkpointing:
+  enabled: true
+  checkpoint_every: 50
+  checkpoint_dir: "./checkpoints"
+  keep_last_n: 3
+  resume_from: null
+
+logging:
+  console_level: "INFO"
+  file_level: "DEBUG"
+  log_file: "./logs/medrag_{timestamp}.log"
+  structured_logs: true
+
+monitoring:
+  track_latency: true
+  track_memory: true
+  track_gpu_usage: true
+  enable_alerts: false
+  use_wandb: false
+  use_mlflow: false
+  export_metrics: true
+  metrics_file: "./results/metrics_{timestamp}.json"
+
+production:
+  max_retries: 3
+  retry_delay: 1.0
+  graceful_degradation: true
+  clear_cuda_cache_every: 50
+  garbage_collect_every: 100
+  max_context_length: 4096
+  max_query_length: 512
+  timeout_per_query: 60
+  validate_json_output: true
+
+optimization:
+  use_kv_cache: true
+  cuda_allow_tf32: true
+  cudnn_benchmark: true
+  cudnn_deterministic: false
