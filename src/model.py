@@ -310,21 +310,25 @@ Provide your answer in the JSON format specified in the system prompt."""
                 )
             elif not use_gpu:
                 reason = "CUDA unavailable" if not cuda_available else f"CUDA free only {gpu_budget_gib:.1f} GiB < {CUDA_MIN_FREE_GIB} GiB threshold (NvMap fragmentation risk)"
-                logger.warning(f"Loading model on CPU (float16): {reason}")
+                logger.warning(f"Loading model on CPU (bfloat16): {reason}")
                 load_kwargs = dict(
                     device_map="cpu",
                     trust_remote_code=True,
-                    torch_dtype=torch.float16,
+                    torch_dtype=torch.bfloat16,
                     attn_implementation="eager",
                 )
                 quantization_config = None
             elif use_gpu_fp16:
-                logger.info(f"Loading model on GPU (float16, no bitsandbytes): {gpu_budget_gib:.1f} GiB available")
+                # Use bfloat16, NOT float16. float16 has a 5-bit exponent (max ~65504)
+                # and overflows in eager attention on sequences ≥ 512 tokens, producing
+                # NaN logits. bfloat16 shares float32's 8-bit exponent so it is numerically
+                # stable at any sequence length. RTX 30xx/40xx support bf16 natively.
+                logger.info(f"Loading model on GPU (bfloat16, no bitsandbytes): {gpu_budget_gib:.1f} GiB available")
                 quantization_config = None
                 load_kwargs = dict(
                     device_map="cuda:0",
                     trust_remote_code=True,
-                    torch_dtype=torch.float16,
+                    torch_dtype=torch.bfloat16,
                     attn_implementation="eager",
                 )
             else:
@@ -522,8 +526,8 @@ Provide your answer in the JSON format specified in the system prompt."""
                         tokenize=False,
                         add_generation_prompt=True,
                     )
-                except Exception:
-                    pass  # fall through to raw prompt if template fails
+                except Exception as _tmpl_err:
+                    logger.warning(f"apply_chat_template failed ({_tmpl_err}) — using raw prompt")
 
             # Tokenize — truncate from the LEFT so the question at the end is preserved.
             # Right-truncation (default) drops the question when context fills the window.

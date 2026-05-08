@@ -81,3 +81,6 @@ Thesis Evaluation Values/
 
 # Recovery script (local utility — not part of published codebase)
 recover_history.py
+
+# Claude Code local state — never publish
+.claude/
