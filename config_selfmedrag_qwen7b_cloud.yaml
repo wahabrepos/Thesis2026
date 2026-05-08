@@ -1,15 +1,16 @@
 # =============================================================================
 # Self-MedRAG (Qwen-7B Cloud): Ablation — generator size 7B vs 1.5B vs Mistral
-# Generator: Qwen2.5-7B-Instruct (BF16, no quantization needed on 24GB GPU)
+# Generator: Qwen2.5-7B-Instruct (4-bit NF4 + BF16 compute, ~4GB disk, ~4GB VRAM)
 # NLI: cross-encoder/nli-deberta-v3-base
 # Dense: BAAI/bge-small-en-v1.5
-# Purpose: thesis generator-size ablation point — 1.5B → 7B → Mistral API
+# Purpose: thesis generator-size ablation point — 1.5B → 7B → 14B → Mistral API
+# Note: 4-bit NF4 required — Vast.ai instance has 16GB disk, BF16 7B needs ~15GB
 # =============================================================================
 
 system:
   device: "cuda"
   mixed_precision: true
-  quantization: "none"          # 24GB VRAM — BF16 fits (~14GB used)
+  quantization: "4bit"          # disk constraint: 16GB instance, 7B BF16=15GB
   max_memory_gb: 20.0
   batch_size: 1
   num_workers: 4
@@ -53,11 +54,11 @@ generator:
   fallback_model: "google/flan-t5-large"
   fallback_model_type: "seq2seq"
 
-  load_in_4bit: false           # BF16 — no quantization, clean comparison to 1.5B
+  load_in_4bit: true            # disk constraint forces 4-bit (16GB disk, 7B BF16=15GB)
   load_in_8bit: false
   bnb_4bit_compute_dtype: "bfloat16"
   bnb_4bit_quant_type: "nf4"
-  bnb_4bit_use_double_quant: false
+  bnb_4bit_use_double_quant: true
 
   max_input_length: 1024
   max_new_tokens: 400
